@@ -1,0 +1,54 @@
+{
+  "name": "pinboard",
+  "productName": "Pinboard",
+  "version": "0.3.0",
+  "description": "Shared post-it note board for the APm R&D team",
+  "main": "main.js",
+  "author": "Alex · APm R&D",
+  "license": "ISC",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.alexkim.pinboard",
+    "productName": "Pinboard",
+    "copyright": "Copyright © 2026 Alex · APm R&D",
+    "files": [
+      "main.js",
+      "preload.js",
+      "pin-widget-preload.js",
+      "desktop-attach.js",
+      "index.html",
+      "pin-widget.html",
+      "style.css",
+      "app.js",
+      "pin-widget.js",
+      "vendor/**/*",
+      "assets/**/*",
+      "node_modules/koffi/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "koffi": "^3.0.2"
+  }
+}

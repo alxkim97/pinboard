@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://uhlbrxyvhfmfeakckzlu.supabase.co wss://uhlbrxyvhfmfeakckzlu.supabase.co" />
+<title>Pinboard</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header id="topbar">
+  <div id="title-block">
+    <h1>📌 Pinboard</h1>
+    <div id="board-subtitle">Alex Kim — R&D Department / แผนกวิจัยและพัฒนา</div>
+  </div>
+  <div id="conn-status" class="conn-status conn-unknown">connecting…</div>
+  <div class="spacer"></div>
+  <button id="btn-undo" class="btn-secondary" title="Undo / ย้อนกลับ (Ctrl+Z)" disabled>↶ Undo</button>
+  <button id="btn-redo" class="btn-secondary" title="Redo / ทำซ้ำ (Ctrl+Y)" disabled>↷ Redo</button>
+  <button id="admin-toggle" class="admin-toggle" title="Admin mode lets you lock/unlock notes / โหมดผู้ดูแล สำหรับล็อก/ปลดล็อกโน้ต">🔓 Admin / ผู้ดูแล</button>
+  <button id="btn-new" class="btn-primary">+ New Note / โน้ตใหม่</button>
+</header>
+
+<main id="board"></main>
+
+<button id="stamp-tool" class="stamp-tool" title="Drag onto a note to mark it done / ลากไปวางบนโน้ตเพื่อทำเสร็จ">✔️</button>
+
+<button id="bin-icon" class="bin-icon" title="Done / เสร็จแล้ว — drag a note here to finish it">
+  🗑️<span id="done-count-badge" class="bin-badge hidden">0</span>
+</button>
+
+<section id="done-section">
+  <div id="done-panel" class="hidden">
+    <div id="done-board-header">Done / เสร็จแล้ว</div>
+    <div id="done-board" class="board"></div>
+  </div>
+</section>
+
+<!-- New / Edit note modal -->
+<div id="note-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="modal-title">New Note</h2>
+    <label>Name of work / ชื่องาน <span class="required-mark">*</span>
+      <input id="f-work-name" type="text" maxlength="120" />
+    </label>
+    <div class="row">
+      <label>Due date / วันครบกำหนด
+        <input id="f-due-date" type="date" />
+      </label>
+      <label>Operator / ผู้รับผิดชอบ
+        <input id="f-operator" type="text" maxlength="60" placeholder="who's doing it / ใครทำ" />
+      </label>
+    </div>
+    <label>Requested by / ผู้ขอ
+      <input id="f-requested-by" type="text" maxlength="60" />
+    </label>
+    <label>Detail / Notes / รายละเอียด
+      <textarea id="f-detail" rows="6" placeholder="free-text description, links, anything that doesn't fit on the card face"></textarea>
+    </label>
+
+    <div id="locked-notice" class="locked-notice hidden">🔒 This note is locked — only an admin can edit or move it. / โน้ตนี้ถูกล็อก แก้ไข/ย้ายได้เฉพาะผู้ดูแล</div>
+    <div id="modal-error" class="modal-error hidden"></div>
+
+    <div class="modal-actions">
+      <button id="btn-lock" class="btn-secondary hidden">🔒 Lock</button>
+      <button id="btn-delete" class="btn-danger hidden">Delete / ลบ</button>
+      <button id="btn-mark-done" class="btn-secondary hidden">Mark Done / เสร็จแล้ว</button>
+      <button id="btn-reopen" class="btn-secondary hidden">Reopen / เปิดใหม่</button>
+      <div class="spacer"></div>
+      <button id="btn-cancel" class="btn-secondary">Cancel / ยกเลิก</button>
+      <button id="btn-save" class="btn-primary">Save / บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Admin PIN modal -->
+<div id="pin-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2>Enter Admin PIN / กรอกรหัสผู้ดูแล</h2>
+    <label>PIN
+      <input id="f-admin-pin" type="password" maxlength="20" autocomplete="off" />
+    </label>
+    <div id="pin-error" class="modal-error hidden">Incorrect PIN. / รหัสไม่ถูกต้อง</div>
+    <div class="modal-actions">
+      <div class="spacer"></div>
+      <button id="btn-pin-cancel" class="btn-secondary">Cancel / ยกเลิก</button>
+      <button id="btn-pin-submit" class="btn-primary">Unlock Admin Mode / ปลดล็อก</button>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/supabase.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
