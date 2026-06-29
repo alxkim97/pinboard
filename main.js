@@ -252,6 +252,7 @@ function openPinWindow(note) {
     frame: false,
     resizable: true,
     skipTaskbar: true,
+    opacity: 0, // hidden until the on-top toggle dance below settles, see comment
     icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'pin-widget-preload.js'),
@@ -272,9 +273,17 @@ function openPinWindow(note) {
     // confirmed empirically (toggling Always-on-Top ON, then OFF, before
     // dragging works; attaching directly on creation doesn't). This
     // codifies that same proven sequence for every new pin automatically.
+    // The window stays invisible (opacity 0, set at creation above) for
+    // this whole handshake so the "ON" half doesn't visibly flash above
+    // every other window on screen — it only appears once settled.
     applyLayering(win, true);
     if (!loadSettings().alwaysOnTop) {
-      setTimeout(() => applyLayering(win, false), 300);
+      setTimeout(() => {
+        applyLayering(win, false);
+        win.setOpacity(1);
+      }, 300);
+    } else {
+      win.setOpacity(1);
     }
   });
 
