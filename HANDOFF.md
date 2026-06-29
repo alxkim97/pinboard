@@ -1,6 +1,6 @@
 # Pinboard — Session Handoff
 
-**Last updated:** 2026-06-27
+**Last updated:** 2026-06-29
 **Current version:** v0.5.0
 **Branch:** master
 
@@ -66,6 +66,16 @@ Discovered when Alex tried to drag a pinned note on the desktop (with "Keep Note
 
 ---
 
+## Board drag boundary + text-selection flicker — fixed 2026-06-29
+
+Alex reported three cosmetic/UX problems with the main board:
+
+1. **Invisible barrier when dragging a note** — `#board` had no real height in CSS, only `min-height: 500px`. Note cards inside it are `position: absolute`, so they're out of flow and never grow `#board`'s actual box past that 500px floor, even though the visible brown canvas fills the rest of the window. The drag-clamp math in `app.js` (`maxLeft`/`maxTop`, computed from `board.clientWidth`/`clientHeight`) was capping movement at that small box instead of the real visible area. **Fixed** by making `body` a flex column and `#board { flex: 1; min-height: 0; overflow: hidden; }` in `style.css`, so `#board`'s rendered size always matches the actual available viewport space below the topbar. Confirmed by Alex: notes can now be dragged to the real edges of the window.
+2. **Text inside a note sometimes got highlighted/selected while dragging** — `.note-card` (board notes) never had `user-select: none` (the desktop pin-widget's `#card` already did). Fast mouse movement during a drag triggered native browser text selection. **Fixed** by adding `user-select: none;` to `.note-card` in `style.css`. Confirmed by Alex.
+3. **Pinned (desktop widget) notes don't tilt like board notes do** — board notes get a random `-3deg..+3deg` rotation (`rotationFor()` in `app.js`, hash of the note id) for a hand-placed sticky-note look; the desktop pin widget never applied this. **Investigated, not fixed by design choice**: a pin widget is a real rectangular OS window (`main.js`'s `openPinWindow()`), and it isn't `transparent: true` — rotating the `#card` element inside it without transparency would expose the window's plain background as visible triangular slivers at two corners, against the user's desktop. Making it `transparent: true` would require solving the exact transparency+`SetParent`+desktop-attach interaction that's documented above as the unsolved cause of the worst breakage this project has had (notes vanishing, desktop icons disappearing during the 2026-06-26 overlay-consolidation attempt). **Alex chose to leave pin widgets flat/axis-aligned rather than risk that** — this is now the intended behavior, not a bug. Don't revisit without first solving that transparency interaction (see "Architecture experiment that failed" above), and don't add `transparent: true` to a pin `BrowserWindow` without re-testing live-drag and desktop-attach from scratch afterward.
+
+---
+
 ## Architecture
 
 - **Supabase** (`pinboard_notes` table) — sole data store for note content. **Lives in the "worklog" Supabase project, NOT "lifelog"** — Pinboard is work-related, so it belongs alongside WorkLog's own project rather than the shared lifelog project used by Alex's personal apps. URL/key are in `app.js`, same constants as WorkLog's `config.json`.
@@ -113,6 +123,7 @@ pinboard_notes (
 - **Bilingual UI** (English / Thai) on all main buttons and modal labels.
 - **Build script is named `build`**, not `build:win` (see [[feedback-electron-build-script-name]] memory) — applies to all Alex's Electron apps.
 - **Undo/redo scope**: create/delete/edit/status/lock/position are undoable; pin/unpin and admin-mode toggle are not (local-only state, not board data).
+- **Pin widgets stay flat/axis-aligned**, unlike the tilted board notes — Alex explicitly chose not to chase pixel-matching the rotation, since doing so would require `transparent: true` pin windows, which risks reintroducing the unsolved transparency+SetParent breakage documented above. See "Board drag boundary + text-selection flicker" section.
 
 ---
 
