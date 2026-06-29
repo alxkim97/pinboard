@@ -111,4 +111,4 @@ function detachFromDesktop(win) {
   }
 }
 
-module.exports = { attachToDesktop, detachFromDesktop, nudgeRedraw };
+module.exports = { attachToDesktop, detachFromDesktop };
