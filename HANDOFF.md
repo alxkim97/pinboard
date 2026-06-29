@@ -43,7 +43,7 @@ Performance note: a real, separate, much higher-impact bug was found and fixed t
 
 ---
 
-## Desktop pin widgets can't be live-dragged once attached — investigation 2026-06-27, fix UNVERIFIED
+## Desktop pin widgets can't be live-dragged once attached — investigation 2026-06-27, fix CONFIRMED WORKING 2026-06-27
 
 Discovered when Alex tried to drag a pinned note on the desktop (with "Keep Notes On Top" OFF, the default): the note's position updates correctly internally (`win.getPosition()` always matched the math exactly, confirmed via logging) but the screen never repaints it — it visually doesn't move at all.
 
@@ -55,14 +55,13 @@ Discovered when Alex tried to drag a pinned note on the desktop (with "Keep Note
 
 **The one conclusive test:** a pin widget that has *never* been through `SetParent` (tested by temporarily skipping the initial `attachToDesktop` call) drags perfectly even with "Keep Notes On Top" OFF. So the live-drag breakage isn't about the window's *current* attach state — it's that once a window's HWND has ever been `SetParent`'d into Explorer's tree, something about its ability to redraw during rapid `setPosition` calls is permanently stuck, even after detaching it again. None of the usual redraw-nudge tricks undo it.
 
-**Current fix attempt (in `main.js`, needs real-PC testing — Alex couldn't test on 2026-06-27):**
+**The fix (in `main.js`):**
 - A second, single, reusable, click-through (`setIgnoreMouseEvents(true)`) "shadow" `BrowserWindow` is created once at startup and kept hidden (`dragShadowWindow` / `createDragShadowWindow()`). It is **never** attached to the desktop layer, so it never gets tainted and always redraws correctly.
 - On `pin:drag-start` (sent from `pin-widget.js` on the *first actual mousemove*, not on mousedown, to avoid a flicker on plain clicks): the real note window goes invisible (`setOpacity(0)`, chosen over `hide()` specifically so it keeps receiving mouse input normally — a hidden window stops getting input, which would break the drag), and the shadow window is positioned over it, force-topmost, and shown.
 - `pin:move-by` (the existing per-mousemove handler) now also mirrors the same delta onto the shadow window, so the real (invisible) window's position stays correct the whole time — no separate sync needed at drag-end.
 - `pin:drag-end`: real window's opacity restored, shadow hidden.
 - **Separately discovered:** a note attached directly on creation (the default OFF path) still wouldn't drag even with all of the above; but a note that was toggled to "Always on Top" ON *first*, then OFF, *did* drag successfully under this same shadow-window code. Since both paths call the exact same `applyLayering(win, false)` → `attachToDesktop()`, the difference seems to be whether the window was ever shown as a normal (non-attached) floating window before its first attach. **Current code now codifies that sequence automatically**: every new pin window calls `applyLayering(win, true)` first, then (only if the global setting is actually OFF) `applyLayering(win, false)` again ~300ms later — replicating the proven-working manual toggle dance instead of attaching directly.
-- **This last piece is UNVERIFIED** — Alex confirmed the *manual* toggle-dance works, but couldn't yet test whether the automatic version (in the code now) actually produces draggable freshly-pinned notes. Test this first next session, on a real PC with "Keep Notes On Top" OFF: pin a brand-new note, wait ~1s, try dragging it.
-- **If it still doesn't work**: the agreed fallback (Alex's call) is to strip all of this back out and document dragging as only working in "Always on Top" mode — i.e., to reposition a desktop-attached note, toggle "Keep Notes On Top" ON, drag, then OFF again. Don't sink more time into native Win32 workarounds (e.g. global mouse hooks to decouple drag-tracking from any specific window's input) without Alex explicitly signing off — diminishing returns for a sticky-note app.
+- **Confirmed working 2026-06-27**: pinning a fresh note (default "Keep Notes On Top" OFF) and dragging it now moves it correctly on screen. Both pieces (the create-time toggle dance, and the live-drag shadow window) are needed together — don't strip either one out without retesting.
 
 ---
 
@@ -123,15 +122,16 @@ pinboard_notes (
 3. Alex may still have a stale installed copy in `C:\Program Files\Pinboard\` from earlier testing sessions — confirm he's running the latest build.
 4. Verify `desktop-attach.js`'s Progman fallback survives an Explorer restart — not yet tested.
 5. **Auto-update — wired up 2026-06-26, confirmed working 2026-06-27 (v0.4.0+).** `electron-updater` against GitHub Releases (`github.com/alxkim97/pinboard`), checks 10s after launch then every 4h, tray "Check for Updates" item. App launches and runs fine with it in place. **Still not tested against a real published release** — that needs `npm run build -- --publish always` with a `GH_TOKEN` (GitHub PAT, `repo` scope) to actually verify the download/install path end-to-end.
-6. **Pinned-note dragging — fix attempted 2026-06-27, UNVERIFIED, see the dedicated section above.** Top priority for next session: test whether a freshly-pinned note (default "Keep Notes On Top" OFF) is now draggable. If not, fall back to documenting the manual toggle-on-then-off workaround instead of continuing to chase it.
+6. **Pinned-note dragging — fixed and confirmed working 2026-06-27**, see the dedicated section above.
 7. **Future idea (not started, just noted 2026-06-26)**: Alex floated making Pinboard the primary entry point for R&D staff, with posts linked into WorkLog, since WorkLog is harder to use for anything beyond viewing the schedule. No design work done on this yet.
+8. **Multi-PC sync gotcha (hit 2026-06-27)**: `node_modules/` is gitignored, so a `git pull` that brings in a new dependency (e.g. `electron-updater` was added to `package.json` on one PC) doesn't update the other PC's `node_modules` automatically. Running `npm start` without `npm install` first throws `Cannot find module '<name>'`. **Always run `npm install` after every pull**, even if you don't think dependencies changed — it's cheap/fast when nothing's new, and this is a recurring pattern across all of Alex's multi-PC apps, not just Pinboard.
 
 ---
 
 ## How to continue on another PC
 
-**Step 1 — Pull latest** (once the GitHub remote exists — see item 5 above, it may not yet)
-**Step 2 — Run `npm install`** in the pinboard folder
+**Step 1 — Pull latest** from `github.com/alxkim97/pinboard`
+**Step 2 — Run `npm install`** in the pinboard folder — do this every time, even if you don't think dependencies changed (see item 8 above)
 **Step 3 — Paste this into a new Claude Code session:**
 
 ```text
@@ -157,14 +157,14 @@ Key facts:
 GitHub remote: github.com/alxkim97/pinboard (published). electron-updater is wired and runs fine,
 but untested against a real published release (needs npm run build -- --publish always + GH_TOKEN).
 
-TOP PRIORITY: pinned-note dragging fix is UNVERIFIED — see "Desktop pin widgets can't be
-live-dragged once attached" section in HANDOFF.md for the full investigation. Test first: pin a
-brand-new note with "Keep Notes On Top" OFF, wait ~1s, try dragging it. If still broken, the
-agreed fallback is to strip the shadow-window/toggle-dance code back out and document dragging
-as Always-on-Top-only — don't keep sinking time into native Win32 workarounds without Alex's
-explicit go-ahead.
+Pinned-note dragging is FIXED and confirmed working (2026-06-27) — see "Desktop pin widgets
+can't be live-dragged once attached" section in HANDOFF.md if touching that code again.
+
+IMPORTANT: after `git pull`, always run `npm install` before `npm start` — node_modules isn't
+in git, so a new dependency added on another PC won't be there until you do. This caused a
+"Cannot find module" crash on 2026-06-27 (electron-updater).
 
 Other pending: portable exe build doesn't launch (installer does, and isn't auto-updatable
 anyway); not tested on a second PC yet; desktop-attach Progman fallback not verified to survive
-an Explorer restart.
+an Explorer restart; auto-update not yet tested against a real published release.
 ```
