@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, screen, Tray, Menu, dialog } = require('ele
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { attachToDesktop, detachFromDesktop } = require('./desktop-attach');
+const { attachToDesktop, detachFromDesktop, squareCorners } = require('./desktop-attach');
 
 // The HTML lang attribute alone doesn't change the native <input type="date">
 // picker's day/month order in Electron — it follows the app's own locale,
@@ -100,6 +100,10 @@ function applyLayering(win, alwaysOnTop) {
     win.setAlwaysOnTop(false);
     attachToDesktop(win);
   }
+  // The `roundedCorners: false` creation option doesn't reliably survive
+  // being SetParent-ed in and out of the desktop layer — reassert it via
+  // the DWM API directly every time the parent changes.
+  squareCorners(win);
 }
 
 function toggleGlobalAlwaysOnTop() {
@@ -336,9 +340,12 @@ function createDragShadowWindow() {
   // (invisible) real window underneath so its existing drag handling
   // keeps working unchanged.
   win.setIgnoreMouseEvents(true);
+  squareCorners(win);
   win.loadFile('pin-widget.html');
   return win;
 }
+
+ipcMain.handle('app:version', () => app.getVersion());
 
 ipcMain.handle('pin:list', () => loadPins());
 

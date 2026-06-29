@@ -37,6 +37,7 @@ body {
 
 #title-block { display: flex; flex-direction: column; line-height: 1.2; }
 #board-subtitle { font-size: 11px; color: #d8c9b8; opacity: 0.85; }
+.app-version { font-size: 11px; font-weight: 400; color: #d8c9b8; opacity: 0.7; vertical-align: middle; }
 
 .spacer { flex: 1; }
 

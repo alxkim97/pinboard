@@ -19,8 +19,15 @@
 
 let koffi;
 let user32;
-let FindWindowA, FindWindowExA, SendMessageTimeoutA, SetParent, EnumWindows;
+let dwmapi;
+let FindWindowA, FindWindowExA, SendMessageTimeoutA, SetParent, EnumWindows, DwmSetWindowAttribute;
 let EnumWindowsProcType;
+
+// Windows 11 rounds the corners of every top-level window, including
+// frameless ones, by default — that clashes with the sharp-cornered
+// paper-card look the note widgets are going for elsewhere.
+const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+const DWMWCP_DONOTROUND = 1;
 
 function init() {
   if (koffi) return;
@@ -34,6 +41,23 @@ function init() {
   SetParent = user32.func('intptr_t SetParent(intptr_t hWndChild, intptr_t hWndNewParent)');
   EnumWindowsProcType = koffi.proto('bool __stdcall EnumWindowsProc(intptr_t hwnd, intptr_t lParam)');
   EnumWindows = user32.func('bool EnumWindows(EnumWindowsProc *lpEnumFunc, intptr_t lParam)');
+  dwmapi = koffi.load('dwmapi.dll');
+  DwmSetWindowAttribute = dwmapi.func(
+    'long DwmSetWindowAttribute(intptr_t hwnd, uint32 dwAttribute, void *pvAttribute, uint32 cbAttribute)'
+  );
+}
+
+function squareCorners(win) {
+  try {
+    init();
+    const hwnd = win.getNativeWindowHandle().readBigUInt64LE();
+    const pref = Buffer.alloc(4);
+    pref.writeUInt32LE(DWMWCP_DONOTROUND, 0);
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, pref, 4);
+  } catch (err) {
+    // Not available pre-Windows 11 — just leave the default rounding.
+    console.error('squareCorners failed:', err.message);
+  }
 }
 
 function findDesktopWorkerW() {
@@ -111,4 +135,4 @@ function detachFromDesktop(win) {
   }
 }
 
-module.exports = { attachToDesktop, detachFromDesktop };
+module.exports = { attachToDesktop, detachFromDesktop, squareCorners };

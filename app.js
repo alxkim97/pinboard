@@ -842,6 +842,10 @@ document.addEventListener('click', (e) => {
   donePanel.classList.add('hidden');
 });
 
+window.pinAPI.version().then((v) => {
+  document.getElementById('app-version').textContent = `v${v}`;
+});
+
 setConnStatus('unknown', 'connecting…');
 fetchNotes().then(() => {
   subscribeRealtime();

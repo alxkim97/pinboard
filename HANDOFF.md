@@ -1,7 +1,7 @@
 # Pinboard — Session Handoff
 
 **Last updated:** 2026-06-29
-**Current version:** v0.5.0
+**Current version:** v0.6.0
 **Branch:** master
 
 ---
@@ -38,6 +38,8 @@ On 2026-06-26 the per-window pin architecture (one BrowserWindow per pinned note
 4. Switching to a periodic (1.5s) redraw nudge made it **worse** — notes stopped appearing even on hover.
 
 The working per-note-window architecture (proven correct, confirmed by Alex multiple times) was restored. The likely root cause: the original per-note windows were small and NOT transparent/click-through — each window's content filled the whole window, no holes needed. The consolidated overlay needed a large mostly-transparent surface with click-through holes, and that combination apparently doesn't composite reliably once `SetParent`'d into a foreign process's (explorer.exe) window tree on this Windows build. **If revisiting consolidation for performance, this transparency+click-through+SetParent interaction is the specific thing to solve first** — don't just retry redraw-nudge variants, they've been exhausted.
+
+**Re-confirmed 2026-06-29, narrower case:** tried giving each individual (non-consolidated, non-click-through) pin widget a transparent window — just to leave a few pixels of slack around a slightly-rotated card so pinned notes could match the board's crooked-note look, the same way `rotationFor()` tilts board notes. Even this much smaller, simpler case (one small mostly-opaque window, no click-through, just `transparent: true` + the existing `SetParent` desktop-attach) rendered the transparent margin as solid opaque white instead of see-through. So the failure isn't specific to "large overlay + click-through" — **any** `transparent: true` window combined with this app's `SetParent` desktop-attach trick appears to break compositing on this Windows build, period. Reverted; pinned desktop notes stay flat/unrotated (only board notes are crooked) until/unless someone finds an actual fix for transparency-under-SetParent rather than working around it.
 
 Performance note: a real, separate, much higher-impact bug was found and fixed the same day — the old pre-single-instance-lock installed build had silently spawned **6 duplicate copies of itself** via "Start with Windows". That's likely the dominant cause of the "laggy on weaker PCs" complaint, not the per-process-per-note overhead. Worth confirming with Alex whether lag is still a real problem after he's been running v0.3.0 for a while before attempting consolidation again.
 
@@ -123,6 +125,9 @@ pinboard_notes (
 - **Bilingual UI** (English / Thai) on all main buttons and modal labels.
 - **Build script is named `build`**, not `build:win` (see [[feedback-electron-build-script-name]] memory) — applies to all Alex's Electron apps.
 - **Undo/redo scope**: create/delete/edit/status/lock/position are undoable; pin/unpin and admin-mode toggle are not (local-only state, not board data).
+- **Pinned desktop notes stay flat (no rotation)**, unlike board notes — see the 2026-06-29 addendum to "Architecture experiment that failed" above. Rotating the pin widget's card needs a transparent window for the rotation slack, and `transparent: true` + this app's `SetParent` desktop-attach trick renders as solid opaque white instead of see-through, on this Windows build at least. Not worth chasing further without a real fix for transparency-under-SetParent.
+- **Pin widget window corners are forced square** via a direct DWM API call (`squareCorners()` in `desktop-attach.js`), reasserted every time `applyLayering()` runs — Electron's own `roundedCorners: false` creation option doesn't reliably survive the `SetParent` attach/detach dance on this Windows build.
+- **App version is shown in the main window's header** (next to the title), fetched via `pinAPI.version()` → `app:version` IPC → `app.getVersion()`.
 - **Pin widgets stay flat/axis-aligned**, unlike the tilted board notes — Alex explicitly chose not to chase pixel-matching the rotation, since doing so would require `transparent: true` pin windows, which risks reintroducing the unsolved transparency+SetParent breakage documented above. See "Board drag boundary + text-selection flicker" section.
 
 ---
@@ -147,7 +152,7 @@ pinboard_notes (
 **Step 3 — Paste this into a new Claude Code session:**
 
 ```text
-Continue Pinboard development. Read HANDOFF.md for full context. Current version: v0.5.0.
+Continue Pinboard development. Read HANDOFF.md for full context. Current version: v0.6.0.
 
 Key facts:
 - Electron 31, vanilla HTML/CSS/JS, Supabase client straight in app.js (no IPC for data)

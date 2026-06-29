@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('pinAPI', {
+  version: () => ipcRenderer.invoke('app:version'),
   list: () => ipcRenderer.invoke('pin:list'),
   open: (note) => ipcRenderer.invoke('pin:open', note),
   close: (id) => ipcRenderer.invoke('pin:close', id),
