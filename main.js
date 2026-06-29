@@ -253,6 +253,7 @@ function openPinWindow(note) {
     resizable: true,
     skipTaskbar: true,
     opacity: 0, // hidden until the on-top toggle dance below settles, see comment
+    roundedCorners: false, // Windows 11 rounds frameless windows by default; keep it square to match the board
     icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'pin-widget-preload.js'),
@@ -323,6 +324,7 @@ function createDragShadowWindow() {
     resizable: false,
     skipTaskbar: true,
     show: false,
+    roundedCorners: false,
     icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'pin-widget-preload.js'),
