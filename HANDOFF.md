@@ -62,6 +62,7 @@ Discovered when Alex tried to drag a pinned note on the desktop (with "Keep Note
 - `pin:drag-end`: real window's opacity restored, shadow hidden.
 - **Separately discovered:** a note attached directly on creation (the default OFF path) still wouldn't drag even with all of the above; but a note that was toggled to "Always on Top" ON *first*, then OFF, *did* drag successfully under this same shadow-window code. Since both paths call the exact same `applyLayering(win, false)` → `attachToDesktop()`, the difference seems to be whether the window was ever shown as a normal (non-attached) floating window before its first attach. **Current code now codifies that sequence automatically**: every new pin window calls `applyLayering(win, true)` first, then (only if the global setting is actually OFF) `applyLayering(win, false)` again ~300ms later — replicating the proven-working manual toggle dance instead of attaching directly.
 - **Confirmed working 2026-06-27**: pinning a fresh note (default "Keep Notes On Top" OFF) and dragging it now moves it correctly on screen. Both pieces (the create-time toggle dance, and the live-drag shadow window) are needed together — don't strip either one out without retesting.
+- **Side effect fixed 2026-06-29**: the toggle dance's "ON" half was briefly visible, flashing the new note above every other window for ~0.3s. New pin windows now start at `opacity: 0` (set at construction) and only call `setOpacity(1)` once settled into their final layering — confirmed by Alex the flash is gone and dragging still works.
 
 ---
 
