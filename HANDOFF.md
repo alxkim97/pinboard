@@ -1,7 +1,7 @@
 # Pinboard — Session Handoff
 
-**Last updated:** 2026-06-26
-**Current version:** v0.3.0
+**Last updated:** 2026-06-27
+**Current version:** v0.5.0
 **Branch:** master
 
 ---
@@ -43,6 +43,29 @@ Performance note: a real, separate, much higher-impact bug was found and fixed t
 
 ---
 
+## Desktop pin widgets can't be live-dragged once attached — investigation 2026-06-27, fix UNVERIFIED
+
+Discovered when Alex tried to drag a pinned note on the desktop (with "Keep Notes On Top" OFF, the default): the note's position updates correctly internally (`win.getPosition()` always matched the math exactly, confirmed via logging) but the screen never repaints it — it visually doesn't move at all.
+
+**What was ruled out, in order, each confirmed by a real test (not just theory):**
+1. Stale post-`SetParent` paint/z-order tracking → tried a resize-based redraw nudge (already used by `attachToDesktop`). No effect.
+2. Same theory, stronger tool → tried `SetWindowPos` with `SWP_FRAMECHANGED`. No effect.
+3. Z-order (note buried behind other app windows, since desktop-attached notes intentionally sit at the back) → tried `win.moveTop()` at drag-start. No effect, and confirmed directly: dragging over a fully empty desktop (every other window minimized) still showed zero movement.
+4. Stale GPU/DirectComposition surface (Chromium never told about the native `SetParent` call) → tried a one-frame opacity flicker to force a recomposite. No effect.
+
+**The one conclusive test:** a pin widget that has *never* been through `SetParent` (tested by temporarily skipping the initial `attachToDesktop` call) drags perfectly even with "Keep Notes On Top" OFF. So the live-drag breakage isn't about the window's *current* attach state — it's that once a window's HWND has ever been `SetParent`'d into Explorer's tree, something about its ability to redraw during rapid `setPosition` calls is permanently stuck, even after detaching it again. None of the usual redraw-nudge tricks undo it.
+
+**Current fix attempt (in `main.js`, needs real-PC testing — Alex couldn't test on 2026-06-27):**
+- A second, single, reusable, click-through (`setIgnoreMouseEvents(true)`) "shadow" `BrowserWindow` is created once at startup and kept hidden (`dragShadowWindow` / `createDragShadowWindow()`). It is **never** attached to the desktop layer, so it never gets tainted and always redraws correctly.
+- On `pin:drag-start` (sent from `pin-widget.js` on the *first actual mousemove*, not on mousedown, to avoid a flicker on plain clicks): the real note window goes invisible (`setOpacity(0)`, chosen over `hide()` specifically so it keeps receiving mouse input normally — a hidden window stops getting input, which would break the drag), and the shadow window is positioned over it, force-topmost, and shown.
+- `pin:move-by` (the existing per-mousemove handler) now also mirrors the same delta onto the shadow window, so the real (invisible) window's position stays correct the whole time — no separate sync needed at drag-end.
+- `pin:drag-end`: real window's opacity restored, shadow hidden.
+- **Separately discovered:** a note attached directly on creation (the default OFF path) still wouldn't drag even with all of the above; but a note that was toggled to "Always on Top" ON *first*, then OFF, *did* drag successfully under this same shadow-window code. Since both paths call the exact same `applyLayering(win, false)` → `attachToDesktop()`, the difference seems to be whether the window was ever shown as a normal (non-attached) floating window before its first attach. **Current code now codifies that sequence automatically**: every new pin window calls `applyLayering(win, true)` first, then (only if the global setting is actually OFF) `applyLayering(win, false)` again ~300ms later — replicating the proven-working manual toggle dance instead of attaching directly.
+- **This last piece is UNVERIFIED** — Alex confirmed the *manual* toggle-dance works, but couldn't yet test whether the automatic version (in the code now) actually produces draggable freshly-pinned notes. Test this first next session, on a real PC with "Keep Notes On Top" OFF: pin a brand-new note, wait ~1s, try dragging it.
+- **If it still doesn't work**: the agreed fallback (Alex's call) is to strip all of this back out and document dragging as only working in "Always on Top" mode — i.e., to reposition a desktop-attached note, toggle "Keep Notes On Top" ON, drag, then OFF again. Don't sink more time into native Win32 workarounds (e.g. global mouse hooks to decouple drag-tracking from any specific window's input) without Alex explicitly signing off — diminishing returns for a sticky-note app.
+
+---
+
 ## Architecture
 
 - **Supabase** (`pinboard_notes` table) — sole data store for note content. **Lives in the "worklog" Supabase project, NOT "lifelog"** — Pinboard is work-related, so it belongs alongside WorkLog's own project rather than the shared lifelog project used by Alex's personal apps. URL/key are in `app.js`, same constants as WorkLog's `config.json`.
@@ -56,6 +79,7 @@ Performance note: a real, separate, much higher-impact bug was found and fixed t
 - **Undo/redo**: `undoStack`/`redoStack` of `{kind, id, before, after}` actions, tracking only this client's own edits (never pushed from realtime echoes of other PCs' changes). `kind: 'create'|'delete'` re-insert/remove the whole row (re-insert reuses the original `id`); `'edit'|'status'|'lock'|'position'` are column-level before/after patches applied via the same update path. Ctrl+Z/Ctrl+Y (or the toolbar buttons) — disabled while a modal is open or a text field has focus, so native text-undo in inputs isn't hijacked. Auto-assigned default positions and bin-drop repositioning intentionally do NOT push undo entries (`persistPosition(id, x, y, false)`).
 - **Done pile**: a 🗑️ bin icon (bottom-right, fixed position) replaces the old text "Done" toggle. Drag a note onto it, or use the ✔️ stamp tool (drag it onto any open note) to mark done — both play a "Done / เสร็จ" stamp animation in place on the board before the note moves to the done panel. Dragging a note out of the done panel back onto the board reopens it at the drop position.
 - **Packaging**: electron-builder, `npm run build` (NOT `build:win` — Alex wants the same script name across all his apps, see memory). `koffi`'s native binary needs `asarUnpack` in `package.json`'s `build` config — native `.node` files can't load from inside an asar archive.
+- **Auto-update**: `electron-updater`, GitHub Releases provider (`build.publish` in `package.json`, pointed at `alxkim97/pinboard`). Checks 10s after launch and every 4h thereafter (silent if nothing found), plus a tray "Check for Updates" item for an explicit check that always reports back. `autoInstallOnAppQuit: true` — a downloaded update installs on next quit even if Alex dismisses the "Restart Now" dialog. To actually publish a release: `npm run build -- --publish always` with a `GH_TOKEN` env var (a GitHub PAT with `repo` scope) set, which uploads the installer + `latest.yml` to a new GitHub Release tagged with `package.json`'s version.
 
 ---
 
@@ -95,11 +119,12 @@ pinboard_notes (
 ## What to continue next session
 
 1. **Test on a second PC** — confirm notes/positions sync live, and confirm the desktop-attach trick behaves the same on a different Windows build (it's explicitly version-fragile — this PC's build (26200) needed the Progman-direct-parent fallback).
-2. **Portable exe build doesn't launch** (the NSIS installer and `win-unpacked/Pinboard.exe` both do) — not investigated, low priority.
+2. **Portable exe build doesn't launch** (the NSIS installer and `win-unpacked/Pinboard.exe` both do) — not investigated, low priority. Note: electron-updater also doesn't support auto-updating the portable target on Windows anyway, only NSIS — another reason the installer is the one to distribute.
 3. Alex may still have a stale installed copy in `C:\Program Files\Pinboard\` from earlier testing sessions — confirm he's running the latest build.
 4. Verify `desktop-attach.js`'s Progman fallback survives an Explorer restart — not yet tested.
-5. **Auto-update**: Alex wants in-app update checking (electron-updater + GitHub Releases). This session set up the local git repo but the GitHub remote was NOT created — `gh` CLI isn't installed and the established workflow (per WorkLog) uses GitHub Desktop + a PAT in Windows Credential Manager, which this session didn't have access to. Alex needs to publish the repo via GitHub Desktop ("Add Local Repository" → "Publish repository", same as WorkLog), then electron-updater wiring can follow.
-6. **Future idea (not started, just noted 2026-06-26)**: Alex floated making Pinboard the primary entry point for R&D staff, with posts linked into WorkLog, since WorkLog is harder to use for anything beyond viewing the schedule. No design work done on this yet.
+5. **Auto-update — wired up 2026-06-26, confirmed working 2026-06-27 (v0.4.0+).** `electron-updater` against GitHub Releases (`github.com/alxkim97/pinboard`), checks 10s after launch then every 4h, tray "Check for Updates" item. App launches and runs fine with it in place. **Still not tested against a real published release** — that needs `npm run build -- --publish always` with a `GH_TOKEN` (GitHub PAT, `repo` scope) to actually verify the download/install path end-to-end.
+6. **Pinned-note dragging — fix attempted 2026-06-27, UNVERIFIED, see the dedicated section above.** Top priority for next session: test whether a freshly-pinned note (default "Keep Notes On Top" OFF) is now draggable. If not, fall back to documenting the manual toggle-on-then-off workaround instead of continuing to chase it.
+7. **Future idea (not started, just noted 2026-06-26)**: Alex floated making Pinboard the primary entry point for R&D staff, with posts linked into WorkLog, since WorkLog is harder to use for anything beyond viewing the schedule. No design work done on this yet.
 
 ---
 
@@ -110,7 +135,7 @@ pinboard_notes (
 **Step 3 — Paste this into a new Claude Code session:**
 
 ```text
-Continue Pinboard development. Read HANDOFF.md for full context. Current version: v0.3.0.
+Continue Pinboard development. Read HANDOFF.md for full context. Current version: v0.5.0.
 
 Key facts:
 - Electron 31, vanilla HTML/CSS/JS, Supabase client straight in app.js (no IPC for data)
@@ -129,7 +154,17 @@ Key facts:
 - Done pile is a 🗑️ bin icon (bottom-right) + a ✔️ stamp-drag tool, not a text toggle
 - Run: npm start | Build: npm run build (electron-builder, NOT build:win)
 
-Pending: no GitHub remote yet (gh CLI not installed; Alex needs to publish via GitHub Desktop
-like he did for WorkLog); portable exe build doesn't launch (installer does); not tested on a
-second PC yet; desktop-attach Progman fallback not verified to survive an Explorer restart.
+GitHub remote: github.com/alxkim97/pinboard (published). electron-updater is wired and runs fine,
+but untested against a real published release (needs npm run build -- --publish always + GH_TOKEN).
+
+TOP PRIORITY: pinned-note dragging fix is UNVERIFIED — see "Desktop pin widgets can't be
+live-dragged once attached" section in HANDOFF.md for the full investigation. Test first: pin a
+brand-new note with "Keep Notes On Top" OFF, wait ~1s, try dragging it. If still broken, the
+agreed fallback is to strip the shadow-window/toggle-dance code back out and document dragging
+as Always-on-Top-only — don't keep sinking time into native Win32 workarounds without Alex's
+explicit go-ahead.
+
+Other pending: portable exe build doesn't launch (installer does, and isn't auto-updatable
+anyway); not tested on a second PC yet; desktop-attach Progman fallback not verified to survive
+an Explorer restart.
 ```

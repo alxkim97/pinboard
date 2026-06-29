@@ -89,14 +89,22 @@ cardEl.addEventListener('mousedown', (e) => {
 window.addEventListener('mousemove', (e) => {
   if (!dragging) return;
   if (e.movementX !== 0 || e.movementY !== 0) {
-    dragMoved = true;
+    if (!dragMoved) {
+      dragMoved = true;
+      // Only now (on the first real movement, not on mousedown) do we tell
+      // main.js a drag is happening — see its pin:drag-start handler for
+      // why this window goes invisible and a shadow window takes over.
+      widgetAPI.dragStart(currentNote);
+    }
     widgetAPI.moveBy(e.movementX, e.movementY);
   }
 });
 
 window.addEventListener('mouseup', () => {
+  if (!dragging) return;
   dragging = false;
   cardEl.classList.remove('dragging');
+  if (dragMoved) widgetAPI.dragEnd();
 });
 
 cardEl.addEventListener('click', (e) => {

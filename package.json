@@ -1,7 +1,7 @@
 {
   "name": "pinboard",
   "productName": "Pinboard",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Shared post-it note board for the APm R&D team",
   "main": "main.js",
   "author": "Alex · APm R&D",
@@ -46,9 +46,15 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "alxkim97",
+      "repo": "pinboard"
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "koffi": "^3.0.2"
   }
 }
