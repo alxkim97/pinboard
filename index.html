@@ -2,7 +2,7 @@
 <html lang="en-GB">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://uhlbrxyvhfmfeakckzlu.supabase.co wss://uhlbrxyvhfmfeakckzlu.supabase.co" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self' https://uhlbrxyvhfmfeakckzlu.supabase.co wss://uhlbrxyvhfmfeakckzlu.supabase.co" />
 <title>Pinboard</title>
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -31,10 +31,36 @@
 
 <section id="done-section">
   <div id="done-panel" class="hidden">
-    <div id="done-board-header">Done / เสร็จแล้ว</div>
+    <div id="done-board-header">
+      <span id="done-board-title">Done / เสร็จแล้ว</span>
+      <span id="trash-retention-label" class="trash-retention-label"></span>
+      <button id="btn-trash-settings" class="trash-settings-btn hidden" type="button" title="Set auto-delete duration / ตั้งเวลาลบอัตโนมัติ">⚙️</button>
+    </div>
     <div id="done-board" class="board"></div>
   </div>
 </section>
+
+<!-- Trash auto-delete settings modal -->
+<div id="trash-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2>Auto-delete Done Notes / ลบโน้ตที่เสร็จแล้วอัตโนมัติ</h2>
+    <label>Delete done notes after / ลบโน้ตที่เสร็จแล้วหลังจาก
+      <select id="f-trash-retention">
+        <option value="">Never / ไม่ลบ</option>
+        <option value="7">7 days / 7 วัน</option>
+        <option value="14">14 days / 14 วัน</option>
+        <option value="30">30 days / 30 วัน</option>
+        <option value="60">60 days / 60 วัน</option>
+        <option value="90">90 days / 90 วัน</option>
+      </select>
+    </label>
+    <div class="modal-actions">
+      <div class="spacer"></div>
+      <button id="btn-trash-cancel" class="btn-secondary">Cancel / ยกเลิก</button>
+      <button id="btn-trash-save" class="btn-primary">Save / บันทึก</button>
+    </div>
+  </div>
+</div>
 
 <!-- New / Edit note modal -->
 <div id="note-modal" class="modal-overlay hidden">
@@ -57,6 +83,15 @@
     <label>Detail / Notes / รายละเอียด
       <textarea id="f-detail" rows="6" placeholder="free-text description, links, anything that doesn't fit on the card face"></textarea>
     </label>
+
+    <label>Image / รูปภาพ
+      <div id="image-dropzone" class="image-dropzone">
+        <img id="image-preview" class="image-preview hidden" alt="" draggable="false" />
+        <div id="image-dropzone-placeholder" class="image-dropzone-placeholder">Drag an image here, click to browse, or paste (Ctrl+V) / ลากรูปมาวาง คลิกเพื่อเลือกไฟล์ หรือวาง (Ctrl+V)</div>
+        <button id="btn-remove-image" class="btn-remove-image hidden" type="button" title="Remove image">✕</button>
+      </div>
+    </label>
+    <input id="f-image-file" type="file" accept="image/*" class="hidden" />
 
     <div id="locked-notice" class="locked-notice hidden">🔒 This note is locked — only an admin can edit or move it. / โน้ตนี้ถูกล็อก แก้ไข/ย้ายได้เฉพาะผู้ดูแล</div>
     <div id="modal-error" class="modal-error hidden"></div>

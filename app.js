@@ -5,6 +5,7 @@
 const SUPA_URL = 'https://uhlbrxyvhfmfeakckzlu.supabase.co';
 const SUPA_KEY = 'sb_publishable_ddVyqs4A4o9j2WsUkDHeZQ_6UskvhMg';
 const TABLE = 'pinboard_notes';
+const SETTINGS_TABLE = 'pinboard_settings';
 
 const supa = supabase.createClient(SUPA_URL, SUPA_KEY);
 
@@ -17,6 +18,7 @@ let pinnedIds = new Set();
 let isAdmin = false;
 let undoStack = [];
 let redoStack = [];
+let boardSettings = { trash_retention_days: null };
 
 const board = document.getElementById('board');
 const doneBoard = document.getElementById('done-board');
@@ -34,6 +36,11 @@ const fDueDate = document.getElementById('f-due-date');
 const fOperator = document.getElementById('f-operator');
 const fRequestedBy = document.getElementById('f-requested-by');
 const fDetail = document.getElementById('f-detail');
+const imageDropzone = document.getElementById('image-dropzone');
+const imagePreview = document.getElementById('image-preview');
+const imageDropzonePlaceholder = document.getElementById('image-dropzone-placeholder');
+const btnRemoveImage = document.getElementById('btn-remove-image');
+const fImageFile = document.getElementById('f-image-file');
 
 const btnUndo = document.getElementById('btn-undo');
 const btnRedo = document.getElementById('btn-redo');
@@ -52,6 +59,13 @@ const fAdminPin = document.getElementById('f-admin-pin');
 const pinError = document.getElementById('pin-error');
 const btnPinCancel = document.getElementById('btn-pin-cancel');
 const btnPinSubmit = document.getElementById('btn-pin-submit');
+
+const trashModal = document.getElementById('trash-modal');
+const fTrashRetention = document.getElementById('f-trash-retention');
+const btnTrashCancel = document.getElementById('btn-trash-cancel');
+const btnTrashSave = document.getElementById('btn-trash-save');
+const btnTrashSettings = document.getElementById('btn-trash-settings');
+const trashRetentionLabel = document.getElementById('trash-retention-label');
 
 let editingId = null; // null = creating a new note
 
@@ -122,6 +136,164 @@ function setConnStatus(state, text) {
   connStatus.textContent = text;
 }
 
+// ---------- image attachments ----------
+// Images are stored inline as a compressed base64 data URI in the note's
+// `image_data` column (no Supabase Storage bucket to set up). Resized
+// client-side before upload so a photo from a phone doesn't bloat the row.
+
+let pendingImageData = null; // data URI for the note currently open in the modal, or null
+let imageFieldLocked = false;
+
+const IMAGE_MAX_DIM = 1000;
+const IMAGE_JPEG_QUALITY = 0.78;
+
+function readAndCompressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error('Could not read file.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Could not read image.'));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > IMAGE_MAX_DIM || height > IMAGE_MAX_DIM) {
+          const scale = IMAGE_MAX_DIM / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function updateImagePreview() {
+  if (pendingImageData) {
+    imagePreview.src = pendingImageData;
+    imagePreview.classList.remove('hidden');
+    imageDropzonePlaceholder.classList.add('hidden');
+    btnRemoveImage.classList.remove('hidden');
+  } else {
+    imagePreview.src = '';
+    imagePreview.classList.add('hidden');
+    imageDropzonePlaceholder.classList.remove('hidden');
+    btnRemoveImage.classList.add('hidden');
+  }
+}
+
+async function handleImageFile(file) {
+  if (imageFieldLocked || !file || !file.type.startsWith('image/')) return;
+  try {
+    pendingImageData = await readAndCompressImage(file);
+    updateImagePreview();
+  } catch (err) {
+    showError(err.message || 'Could not load that image.');
+  }
+}
+
+imageDropzone.addEventListener('click', () => {
+  if (imageFieldLocked) return;
+  fImageFile.click();
+});
+fImageFile.addEventListener('change', () => {
+  if (fImageFile.files[0]) handleImageFile(fImageFile.files[0]);
+  fImageFile.value = '';
+});
+imageDropzone.addEventListener('dragover', (e) => {
+  if (imageFieldLocked) return;
+  e.preventDefault();
+  imageDropzone.classList.add('drag-over');
+});
+imageDropzone.addEventListener('dragleave', () => imageDropzone.classList.remove('drag-over'));
+imageDropzone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  imageDropzone.classList.remove('drag-over');
+  if (imageFieldLocked) return;
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) handleImageFile(file);
+});
+btnRemoveImage.addEventListener('click', (e) => {
+  e.stopPropagation();
+  pendingImageData = null;
+  updateImagePreview();
+});
+document.addEventListener('paste', (e) => {
+  if (modal.classList.contains('hidden') || imageFieldLocked) return;
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      handleImageFile(item.getAsFile());
+      break;
+    }
+  }
+});
+
+// Dropping an image straight onto the board (e.g. from File Explorer, not
+// via the modal's dropzone) creates a brand-new note at the drop point
+// with that image already attached, named after the file, then opens it
+// in the edit modal so work_name/due date/etc. can be filled in — a
+// dropped image always needs a work_name since the column is NOT NULL.
+// Note that #board sits behind the modal overlay (z-index), so this never
+// fires while a modal is already open — the overlay receives the drop
+// event instead, same as any other click there.
+board.addEventListener('dragover', (e) => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  board.classList.add('board-drag-over');
+});
+board.addEventListener('dragleave', (e) => {
+  const rect = board.getBoundingClientRect();
+  if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+    board.classList.remove('board-drag-over');
+  }
+});
+board.addEventListener('drop', (e) => {
+  e.preventDefault();
+  board.classList.remove('board-drag-over');
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!file || !file.type.startsWith('image/')) return;
+  const rect = board.getBoundingClientRect();
+  createNoteFromDroppedImage(file, e.clientX - rect.left - 100, e.clientY - rect.top - 20);
+});
+
+async function createNoteFromDroppedImage(file, x, y) {
+  let imageData;
+  try {
+    imageData = await readAndCompressImage(file);
+  } catch (err) {
+    showError(err.message || 'Could not load that image.');
+    return;
+  }
+  const clamped = clampToBoard(x, y, 200, 180);
+  const payload = {
+    work_name: file.name.replace(/\.[^.]+$/, '').trim() || 'New Note',
+    due_date: null,
+    operator: null,
+    requested_by: null,
+    detail: null,
+    image_data: imageData,
+    pos_x: clamped.x,
+    pos_y: clamped.y,
+  };
+  try {
+    const { data, error } = await supa.from(TABLE).insert(payload).select().single();
+    if (error) throw error;
+    notes.push(data);
+    pushUndo({ kind: 'create', id: data.id, data });
+    renderBoard();
+    openEditModal(data);
+  } catch (err) {
+    showError(err.message || 'Failed to create note from image.');
+  }
+}
+
 // ---------- rendering ----------
 
 let dragState = null; // { id, card, startX, startY, origLeft, origTop, moved }
@@ -134,6 +306,19 @@ function defaultPositionFor(index) {
   const col = index % 5;
   const row = Math.floor(index / 5);
   return { x: 30 + col * 220, y: 30 + row * 200 };
+}
+
+// Keeps a note's on-screen position inside the currently visible board —
+// without this, a note placed (or synced from another PC) at a pixel
+// position that fit a maximized window can end up past the edge of a
+// smaller/restored window and get clipped by #board's overflow:hidden,
+// effectively vanishing until the window is maximized again. This only
+// adjusts what's rendered for this client right now; it does not rewrite
+// the note's stored pos_x/pos_y (other clients may have more room).
+function clampToBoard(x, y, cardWidth, cardHeight) {
+  const maxLeft = Math.max(0, board.clientWidth - cardWidth - 4);
+  const maxTop = Math.max(0, board.clientHeight - cardHeight - 4);
+  return { x: Math.min(Math.max(0, x), maxLeft), y: Math.min(Math.max(0, y), maxTop) };
 }
 
 // ---------- undo / redo ----------
@@ -237,6 +422,7 @@ function renderBoard() {
   board.innerHTML = '';
   open.forEach((note, idx) => {
     const card = buildCard(note, true);
+    board.appendChild(card); // append first so offsetWidth/offsetHeight are measurable for clamping
     let { pos_x: x, pos_y: y } = note;
     if (x == null || y == null) {
       const def = defaultPositionFor(idx);
@@ -247,9 +433,9 @@ function renderBoard() {
         persistPosition(note.id, x, y, false);
       }
     }
-    card.style.left = x + 'px';
-    card.style.top = y + 'px';
-    board.appendChild(card);
+    const clamped = clampToBoard(x, y, card.offsetWidth, card.offsetHeight);
+    card.style.left = clamped.x + 'px';
+    card.style.top = clamped.y + 'px';
   });
 
   doneBoard.innerHTML = '';
@@ -395,13 +581,16 @@ stampTool.addEventListener('mousedown', (e) => {
 function buildCard(note, freeform) {
   const card = document.createElement('div');
   card.dataset.id = note.id;
+  const imageOnly = !!note.image_data;
   card.className = 'note-card'
     + (note.status === 'done' ? ' done' : '')
     + (isOverdue(note) ? ' overdue' : '')
-    + (isDueSoon(note) ? ' due-soon' : '');
+    + (isDueSoon(note) ? ' due-soon' : '')
+    + (imageOnly ? ' image-only' : '');
   const colors = operatorColor(note.operator);
   card.style.backgroundColor = colors.bg;
   card.style.transform = `rotate(${rotationFor(note.id)}deg)`;
+  if (imageOnly) card.title = note.work_name || '';
 
   if (freeform) {
     card.addEventListener('mousedown', (e) => {
@@ -436,6 +625,18 @@ function buildCard(note, freeform) {
     });
   }
 
+  if (note.image_data) {
+    const thumb = document.createElement('img');
+    thumb.className = 'note-thumb';
+    thumb.src = note.image_data;
+    thumb.alt = note.work_name || '';
+    thumb.draggable = false; // otherwise mousedown on the thumbnail starts a
+    // native browser image-drag instead of our own mousedown/mousemove-based
+    // card dragging, so the note never registers as "moved" and just opens
+    // the edit modal on mouseup instead of actually moving.
+    card.appendChild(thumb);
+  }
+
   const pinBtn = document.createElement('button');
   pinBtn.className = 'pin-toggle' + (pinnedIds.has(note.id) ? ' pinned' : '');
   pinBtn.title = pinnedIds.has(note.id) ? 'Unpin from desktop' : 'Pin to desktop';
@@ -446,29 +647,35 @@ function buildCard(note, freeform) {
   });
   card.appendChild(pinBtn);
 
-  const workName = document.createElement('div');
-  workName.className = 'work-name';
-  workName.textContent = note.work_name;
-  card.appendChild(workName);
+  // A note with an image shows only the image (full-bleed) — no title/date/
+  // meta text on the card face. Nothing is lost: work_name, due date, etc.
+  // are still set and still editable, just via the modal (opened on click)
+  // rather than printed on top of the photo.
+  if (!imageOnly) {
+    const workName = document.createElement('div');
+    workName.className = 'work-name';
+    workName.textContent = note.work_name;
+    card.appendChild(workName);
 
-  const due = document.createElement('div');
-  due.className = 'due-date';
-  due.textContent = (note.locked ? '🔒 ' : '') + (isOverdue(note) ? '⚠ ' : '') + formatDate(note.due_date);
-  card.appendChild(due);
+    const due = document.createElement('div');
+    due.className = 'due-date';
+    due.textContent = (note.locked ? '🔒 ' : '') + (isOverdue(note) ? '⚠ ' : '') + formatDate(note.due_date);
+    card.appendChild(due);
 
-  if (note.requested_by) {
-    const req = document.createElement('div');
-    req.className = 'meta-line';
-    req.textContent = 'From: ' + note.requested_by;
-    card.appendChild(req);
-  }
+    if (note.requested_by) {
+      const req = document.createElement('div');
+      req.className = 'meta-line';
+      req.textContent = 'From: ' + note.requested_by;
+      card.appendChild(req);
+    }
 
-  if (note.operator) {
-    const tag = document.createElement('div');
-    tag.className = 'operator-tag';
-    tag.textContent = note.operator;
-    tag.style.color = colors.tag;
-    card.appendChild(tag);
+    if (note.operator) {
+      const tag = document.createElement('div');
+      tag.className = 'operator-tag';
+      tag.textContent = note.operator;
+      tag.style.color = colors.tag;
+      card.appendChild(tag);
+    }
   }
 
   if (note.status === 'done') {
@@ -523,6 +730,10 @@ function openNewModal() {
   fRequestedBy.value = '';
   fDetail.value = '';
   [fWorkName, fDueDate, fOperator, fRequestedBy, fDetail].forEach((el) => { el.disabled = false; });
+  pendingImageData = null;
+  imageFieldLocked = false;
+  imageDropzone.classList.remove('disabled');
+  updateImagePreview();
   lockedNotice.classList.add('hidden');
   btnSave.classList.remove('hidden');
   btnLock.classList.add('hidden');
@@ -556,6 +767,10 @@ function openEditModal(note) {
   [fWorkName, fDueDate, fOperator, fRequestedBy, fDetail].forEach((el) => {
     el.disabled = lockedForMe;
   });
+  pendingImageData = note.image_data || null;
+  imageFieldLocked = lockedForMe;
+  imageDropzone.classList.toggle('disabled', lockedForMe);
+  updateImagePreview();
   lockedNotice.classList.toggle('hidden', !lockedForMe);
   btnSave.classList.toggle('hidden', lockedForMe);
 
@@ -613,6 +828,7 @@ async function saveNote() {
     operator: fOperator.value.trim() || null,
     requested_by: fRequestedBy.value.trim() || null,
     detail: fDetail.value.trim() || null,
+    image_data: pendingImageData,
   };
 
   btnSave.disabled = true;
@@ -632,6 +848,7 @@ async function saveNote() {
             operator: before.operator,
             requested_by: before.requested_by,
             detail: before.detail,
+            image_data: before.image_data,
           },
           after: payload,
         });
@@ -717,6 +934,50 @@ async function setStatus(status) {
   }
 }
 
+// ---------- trash auto-delete ----------
+// One shared team-wide setting (pinboard_settings, singleton row id=1),
+// not per-PC — everyone should see done notes purge on the same schedule.
+// Editable via the gear icon in the done panel, admin-gated like locking.
+
+function updateTrashRetentionLabel() {
+  const days = boardSettings.trash_retention_days;
+  trashRetentionLabel.textContent = days ? `Auto-delete: ${days}d` : 'Auto-delete: Never';
+}
+
+async function fetchSettings() {
+  const { data, error } = await supa.from(SETTINGS_TABLE).select('*').eq('id', 1).maybeSingle();
+  if (error) {
+    console.error(error);
+    return;
+  }
+  if (data) boardSettings = data;
+  updateTrashRetentionLabel();
+}
+
+// Deletes done notes older than the configured retention window. Uses
+// updated_at (kept current by the DB trigger on every write) as a stand-in
+// for "when it was marked done" — good enough for a soft cleanup feature,
+// not tracked in undo since it's a background/shared action, not a direct
+// edit by this client (same reasoning as auto-assigned default positions).
+async function purgeExpiredDone() {
+  const days = boardSettings.trash_retention_days;
+  if (!days || days <= 0) return;
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  const expired = notes.filter((n) => n.status === 'done' && n.updated_at && n.updated_at < cutoff);
+  if (!expired.length) return;
+  for (const note of expired) {
+    const { error } = await supa.from(TABLE).delete().eq('id', note.id);
+    if (!error) {
+      notes = notes.filter((n) => n.id !== note.id);
+      if (pinnedIds.has(note.id)) {
+        await window.pinAPI.close(note.id);
+        pinnedIds.delete(note.id);
+      }
+    }
+  }
+  renderBoard();
+}
+
 // ---------- data sync ----------
 
 async function fetchNotes() {
@@ -757,6 +1018,11 @@ function subscribeRealtime() {
   supa
     .channel('pinboard_notes_changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, applyRealtimeChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: SETTINGS_TABLE }, (payload) => {
+      if (payload.new) boardSettings = payload.new;
+      updateTrashRetentionLabel();
+      purgeExpiredDone();
+    })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') setConnStatus('ok', 'live');
       else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnStatus('error', 'offline');
@@ -797,6 +1063,7 @@ function setAdminUI(on) {
   adminToggle.classList.toggle('active', on);
   adminToggle.textContent = on ? '🔒 Admin / ผู้ดูแล' : '🔓 Admin / ผู้ดูแล';
   adminToggle.title = on ? 'Admin mode is ON — click to turn off' : 'Admin mode lets you lock/unlock notes';
+  btnTrashSettings.classList.toggle('hidden', !on);
   renderBoard();
 }
 
@@ -836,10 +1103,38 @@ binIcon.addEventListener('click', () => {
   donePanel.classList.toggle('hidden');
 });
 
+btnTrashSettings.addEventListener('click', () => {
+  fTrashRetention.value = boardSettings.trash_retention_days ? String(boardSettings.trash_retention_days) : '';
+  trashModal.classList.remove('hidden');
+});
+btnTrashCancel.addEventListener('click', () => trashModal.classList.add('hidden'));
+btnTrashSave.addEventListener('click', async () => {
+  const val = fTrashRetention.value ? parseInt(fTrashRetention.value, 10) : null;
+  const { data, error } = await supa.from(SETTINGS_TABLE).update({ trash_retention_days: val }).eq('id', 1).select().single();
+  if (error) {
+    console.error(error);
+    return;
+  }
+  boardSettings = data;
+  updateTrashRetentionLabel();
+  trashModal.classList.add('hidden');
+  purgeExpiredDone();
+});
+trashModal.addEventListener('click', (e) => { if (e.target === trashModal) trashModal.classList.add('hidden'); });
+
 document.addEventListener('click', (e) => {
   if (donePanel.classList.contains('hidden')) return;
   if (donePanel.contains(e.target) || binIcon.contains(e.target)) return;
   donePanel.classList.add('hidden');
+});
+
+// Re-clamp/reflow note positions whenever the window changes size (e.g.
+// maximize/restore) so notes near the previous edge don't stay clipped by
+// #board's overflow:hidden — see clampToBoard() for details.
+let resizeDebounceTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeDebounceTimer);
+  resizeDebounceTimer = setTimeout(renderBoard, 120);
 });
 
 window.pinAPI.version().then((v) => {
@@ -847,7 +1142,11 @@ window.pinAPI.version().then((v) => {
 });
 
 setConnStatus('unknown', 'connecting…');
-fetchNotes().then(() => {
+Promise.all([fetchNotes(), fetchSettings()]).then(() => {
   subscribeRealtime();
   restorePins();
+  purgeExpiredDone();
 });
+// Retention could be edited on another PC while this one is idle for a
+// long time, so check periodically too, not just right after edits.
+setInterval(purgeExpiredDone, 60 * 60 * 1000);

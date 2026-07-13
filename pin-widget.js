@@ -56,13 +56,41 @@ function render(note) {
   card.classList.toggle('overdue', overdue);
   card.classList.toggle('due-soon', dueSoon);
 
-  document.getElementById('f-work-name').textContent = note.work_name;
-  document.getElementById('f-due-date').textContent = (overdue ? '⚠ ' : '') + formatDate(note.due_date);
+  const imageOnly = !!note.image_data;
+  card.classList.toggle('image-only', imageOnly);
+  card.title = imageOnly ? (note.work_name || '') : '';
 
+  const imgEl = document.getElementById('f-image');
+  if (note.image_data) {
+    imgEl.src = note.image_data;
+    imgEl.alt = note.work_name || '';
+    imgEl.classList.remove('hidden');
+  } else {
+    imgEl.src = '';
+    imgEl.classList.add('hidden');
+  }
+
+  // A note with an image shows only the image (see .image-only above) —
+  // the rest is still set on `note`, just not rendered on the card face.
+  const workNameEl = document.getElementById('f-work-name');
+  const dueEl = document.getElementById('f-due-date');
   const reqEl = document.getElementById('f-requested-by');
+  const opEl = document.getElementById('f-operator');
+  workNameEl.classList.toggle('hidden', imageOnly);
+  dueEl.classList.toggle('hidden', imageOnly);
+  if (imageOnly) {
+    reqEl.classList.add('hidden');
+    opEl.classList.add('hidden');
+    return;
+  }
+
+  workNameEl.textContent = note.work_name;
+  dueEl.textContent = (overdue ? '⚠ ' : '') + formatDate(note.due_date);
+
+  reqEl.classList.remove('hidden');
   reqEl.textContent = note.requested_by ? 'From: ' + note.requested_by : '';
 
-  const opEl = document.getElementById('f-operator');
+  opEl.classList.remove('hidden');
   if (note.operator) {
     opEl.textContent = note.operator;
     opEl.style.color = colors.tag;

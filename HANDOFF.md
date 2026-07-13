@@ -1,7 +1,7 @@
 # Pinboard — Session Handoff
 
-**Last updated:** 2026-06-29
-**Current version:** v0.6.0
+**Last updated:** 2026-07-13
+**Current version:** v0.7.0
 **Branch:** master
 
 ---
@@ -24,6 +24,23 @@ Pinboard is an Electron app: a shared sticky-note board for the APm R&D team. Mu
 **Run (dev):** `npm install` then `npm start`
 **Build installer/portable exe:** `npm run build` (electron-builder → `dist/Pinboard Setup <version>.exe` + portable; the portable target failed to launch when tested — use the installer, or `dist/win-unpacked/Pinboard.exe` directly).
 **No local config file for Supabase** — the anon key is embedded directly in `app.js` (public by design; access is controlled by RLS). Pin window positions/sizes ARE stored locally per-PC in `<userData>/pins.json`; the always-on-top mode is in `<userData>/settings.json` (also per-PC).
+
+---
+
+## v0.7.0 (2026-07-13) — images, viewport clamp fix, trash auto-delete
+
+Four requests handled this session:
+
+1. **Attach images to notes.** New `image_data` column on `pinboard_notes` — a base64 JPEG data URI, resized client-side (canvas, capped at 1000px longest side, quality 0.78) before it ever leaves the renderer. No Supabase Storage bucket needed; it rides along in the same row/realtime payload as everything else. Attach via the modal's drop zone: drag a file onto it, click it to browse, or paste (Ctrl+V) while the modal is open. **Also works dropped straight onto the open board** (e.g. from File Explorer, not just inside a modal) — `board`'s own `dragover`/`drop` listeners in `app.js` catch this, compress the image the same way, then `createNoteFromDroppedImage()` inserts a brand-new note at the drop point (`work_name` guessed from the filename, since the column is NOT NULL) and immediately opens it in the edit modal so the name/due date/etc. can be filled in. This only fires when no modal is open — the modal overlay's higher z-index intercepts the drop event first when one is. Shown as a full-bleed thumbnail at the top of the card (board, done panel, and the desktop pin widget all render it if present — `note-thumb`/`.thumb` CSS classes, `#board.board-drag-over` for the drop-target highlight). Both `index.html`'s and `pin-widget.html`'s CSP needed `img-src 'self' data:;` added — `data:` URIs are blocked under plain `default-src 'self'` otherwise, images would just silently fail to render.
+2. **Notes disappearing between maximized/restored window sizes — root cause found and fixed.** `#board` clips with `overflow:hidden` and notes are absolutely positioned at their raw stored `pos_x`/`pos_y` pixel coordinates. Nothing ever reflowed those on resize, and nothing clamped them to the *currently* visible area — only active dragging was clamped. A note placed (by this client or synced from another PC/monitor) at a position that fit a large/maximized window would render past the edge of a smaller/restored one and get clipped, i.e. become invisible with no way to scroll to it (board scrolling is intentionally disabled). Fixed with `clampToBoard()` in `app.js`: `renderBoard()` now appends each card first, measures its real `offsetWidth`/`offsetHeight`, then clamps the position to whatever `#board`'s current size actually is before setting `left`/`top`. Added a debounced `window.resize` listener that re-runs `renderBoard()` so maximize/restore reflows immediately. **Important:** this only changes what's rendered for the client experiencing the small window — it does NOT rewrite the note's stored `pos_x`/`pos_y`, so a second client with more screen space isn't affected and doesn't fight over position writes.
+3. **Trash (done-pile) auto-delete, shared team-wide setting.** New `pinboard_settings` singleton table (`id=1` row, `trash_retention_days` — null/omitted means never). Deliberately a *shared* setting, not per-PC local config, so every client purges done notes on the same schedule — see the ⚙️ gear icon added to the done panel header (`#done-board-header`), visible only in Admin mode (same soft-gate pattern as note locking), opening a small modal with a day-count `<select>`. `purgeExpiredDone()` in `app.js` deletes any `status='done'` note whose `updated_at` is older than the configured window — runs on startup, right after an admin saves a new retention value, and hourly via `setInterval` (so a long-idle client still catches up eventually). Uses `updated_at` (already kept current by the existing DB trigger on every write) as a stand-in for "when it was marked done" — not exact if a done note gets edited again later, but good enough for a soft cleanup feature. **Not pushed to undo** — same reasoning as auto-assigned default positions: it's a background/shared cleanup action, not a direct edit by one client, so undo tracking would be misleading. Settings changes sync live via a second `postgres_changes` listener on the same realtime channel as notes.
+4. **Version bump to v0.7.0** for the above (`package.json`).
+
+**Fixed a re-run bug found while doing this migration for real:** the `create policy` statements had no `drop policy if exists` guard, so re-running the full script against a database that already had `pinboard_notes` set up would error out on the very first policy statement (Postgres has no `create policy if not exists`) — likely aborting the whole script and rolling back the `alter table ... add column` statements that ran just before it in the same transaction. Every `create policy` in the file is now preceded by a matching `drop policy if exists`, so the whole file is actually safe to paste and run end-to-end regardless of whether it's a fresh setup or a repeat migration.
+
+**Migration needed:** existing installs must re-run the updated `supabase-setup.sql` (idempotent, safe to re-run — adds `image_data` to `pinboard_notes` and creates `pinboard_settings` if missing) and then enable Realtime replication on **both** `pinboard_notes` and the new `pinboard_settings` table (Database → Replication in the Supabase dashboard) — the settings realtime listener silently does nothing useful without it, it'll just fall back to picking up changes on next full reload.
+
+**Not yet tested against a real Supabase instance this session** — the SQL migration, image round-trip, and live-clamp-on-resize should all be verified against the actual `worklog` project before considering this done. See "What to continue next session" below.
 
 ---
 
@@ -129,11 +146,15 @@ pinboard_notes (
 - **Pin widget window corners are forced square** via a direct DWM API call (`squareCorners()` in `desktop-attach.js`), reasserted every time `applyLayering()` runs — Electron's own `roundedCorners: false` creation option doesn't reliably survive the `SetParent` attach/detach dance on this Windows build.
 - **App version is shown in the main window's header** (next to the title), fetched via `pinAPI.version()` → `app:version` IPC → `app.getVersion()`.
 - **Pin widgets stay flat/axis-aligned**, unlike the tilted board notes — Alex explicitly chose not to chase pixel-matching the rotation, since doing so would require `transparent: true` pin windows, which risks reintroducing the unsolved transparency+SetParent breakage documented above. See "Board drag boundary + text-selection flicker" section.
+- **Images are stored inline as base64 data URIs on the note row**, not in a Supabase Storage bucket — keeps the trust/setup model identical to the rest of the app (one SQL migration, no bucket policy to configure), at the cost of some DB row bloat. Resized/compressed client-side (max 1000px, JPEG q0.78) specifically to keep that bloat bounded. Revisit only if photo notes become common enough that row size becomes a real problem.
+- **Trash auto-delete retention is one shared team-wide setting** (`pinboard_settings` table), not per-PC — so every client purges done notes on the same schedule instead of disagreeing about what's still there. Admin-gated to change, visible to everyone.
+- **Board resize/clamp fix only adjusts what's rendered locally**, never rewrites a note's stored `pos_x`/`pos_y` — avoids different-sized clients fighting over "the real" position via repeated writes. See the v0.7.0 section above.
 
 ---
 
 ## What to continue next session
 
+0. **v0.7.0 features not yet verified against a real Supabase instance** — re-run `supabase-setup.sql` against the `worklog` project, enable Realtime replication on `pinboard_settings` (in addition to the existing `pinboard_notes`), then confirm: an image actually attaches/syncs/displays on the board, done panel, and a pinned desktop widget; the done-panel ⚙️ gear (Admin mode only) saves a retention value and it actually purges an old done note; and resizing/un-maximizing the main window no longer clips notes near the previous edge.
 1. **Test on a second PC** — confirm notes/positions sync live, and confirm the desktop-attach trick behaves the same on a different Windows build (it's explicitly version-fragile — this PC's build (26200) needed the Progman-direct-parent fallback).
 2. **Portable exe build doesn't launch** (the NSIS installer and `win-unpacked/Pinboard.exe` both do) — not investigated, low priority. Note: electron-updater also doesn't support auto-updating the portable target on Windows anyway, only NSIS — another reason the installer is the one to distribute.
 3. Alex may still have a stale installed copy in `C:\Program Files\Pinboard\` from earlier testing sessions — confirm he's running the latest build.
@@ -152,7 +173,7 @@ pinboard_notes (
 **Step 3 — Paste this into a new Claude Code session:**
 
 ```text
-Continue Pinboard development. Read HANDOFF.md for full context. Current version: v0.6.0.
+Continue Pinboard development. Read HANDOFF.md for full context. Current version: v0.7.0.
 
 Key facts:
 - Electron 31, vanilla HTML/CSS/JS, Supabase client straight in app.js (no IPC for data)
@@ -184,4 +205,13 @@ in git, so a new dependency added on another PC won't be there until you do. Thi
 Other pending: portable exe build doesn't launch (installer does, and isn't auto-updatable
 anyway); not tested on a second PC yet; desktop-attach Progman fallback not verified to survive
 an Explorer restart; auto-update not yet tested against a real published release.
+
+v0.7.0 added images-on-notes (base64 data URI in a new `image_data` column, resized
+client-side, no Storage bucket), a shared `pinboard_settings` table for trash-bin
+auto-delete (retention set via an Admin-only gear icon in the done panel), and a fix
+for notes getting visually clipped/hidden when the window is resized/un-maximized
+(positions are now clamped to the current viewport at render time, not just during
+drag). Re-run supabase-setup.sql and enable Realtime on pinboard_settings too. None of
+this has been verified against a real Supabase instance yet — see item 0 in "What to
+continue next session" in HANDOFF.md.
 ```
