@@ -392,7 +392,7 @@ ipcMain.on('pin:drag-start', (event, note) => {
   dragShadowWindow.setAlwaysOnTop(true);
   dragShadowWindow.moveTop();
   realWin.setOpacity(0);
-  activeDrag = { realWin, shadowWin: dragShadowWindow };
+  activeDrag = { realWin, shadowWin: dragShadowWindow, noteId: note.id };
 });
 
 ipcMain.on('pin:drag-end', (event) => {
@@ -400,6 +400,14 @@ ipcMain.on('pin:drag-end', (event) => {
   if (!win) return;
   win.setOpacity(1);
   if (activeDrag && activeDrag.realWin === win) {
+    // The real window's 'moved' event doesn't reliably fire once it's been
+    // SetParent-ed onto the desktop layer (same underlying quirk as the
+    // repaint issue this shadow-window dance works around), so drags never
+    // made it into pins.json and every pin reset to its cascade spot on
+    // next launch. getPosition() itself stays accurate throughout the drag
+    // (confirmed via the repaint investigation), so persist explicitly here.
+    const [x, y] = win.getPosition();
+    updatePin(activeDrag.noteId, { x, y });
     activeDrag.shadowWin.setAlwaysOnTop(false);
     activeDrag.shadowWin.hide();
     activeDrag = null;

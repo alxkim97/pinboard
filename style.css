@@ -110,6 +110,11 @@ button:disabled {
   min-height: 0;
   padding: 30px;
   overflow: hidden;
+  /* Own stacking context so a note's bring-to-front z-index (which climbs
+     indefinitely as notes are touched) can never paint over the topbar,
+     bin icon, or done panel — those live outside #board and stack above
+     it as a whole regardless of what z-index values notes reach inside. */
+  isolation: isolate;
 }
 #board.board-drag-over {
   outline: 3px dashed #e8b13a;
@@ -162,11 +167,41 @@ button:disabled {
   position: absolute;
   cursor: grab;
   transition: none;
+  min-width: 140px;
+  min-height: 120px;
 }
 #board .note-card.dragging-card {
   cursor: grabbing;
   transition: none;
   box-shadow: 6px 10px 18px rgba(0,0,0,0.5);
+}
+#board .note-card.resizing-card {
+  transition: none;
+  box-shadow: 6px 10px 18px rgba(0,0,0,0.5);
+}
+
+.resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  opacity: 0;
+}
+#board .note-card:hover .resize-handle,
+#board .note-card.resizing-card .resize-handle {
+  opacity: 1;
+}
+.resize-handle::before {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(0,0,0,0.4);
+  border-bottom: 2px solid rgba(0,0,0,0.4);
 }
 .note-card:hover {
   transform: scale(1.04) rotate(0deg) !important;

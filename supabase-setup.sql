@@ -27,6 +27,11 @@ alter table pinboard_notes add column if not exists locked boolean not null defa
 -- client-side before upload) — no Supabase Storage bucket needed.
 alter table pinboard_notes add column if not exists image_data text;
 
+-- Per-note size on the board, set by dragging the resize handle. Null means
+-- "use the default 200x180 card size".
+alter table pinboard_notes add column if not exists width double precision;
+alter table pinboard_notes add column if not exists height double precision;
+
 -- Shared team board, no per-user login — anyone with the anon key can read/write.
 -- (Same trust model as WorkLog: access control is "only people who run this app
 -- have the key", not per-row ownership.)

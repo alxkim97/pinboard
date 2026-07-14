@@ -297,8 +297,27 @@ async function createNoteFromDroppedImage(file, x, y) {
 // ---------- rendering ----------
 
 let dragState = null; // { id, card, startX, startY, origLeft, origTop, moved }
+let resizeState = null; // { id, card, startX, startY, startWidth, startHeight, moved }
 let reopenDrag = null; // { id, ghost, startX, startY, moved }
 let stampDrag = null; // { ghost, targetCard }
+
+const NOTE_DEFAULT_WIDTH = 200;
+const NOTE_DEFAULT_HEIGHT = 180;
+const NOTE_MIN_WIDTH = 140;
+const NOTE_MIN_HEIGHT = 120;
+const NOTE_MAX_WIDTH = 520;
+const NOTE_MAX_HEIGHT = 520;
+
+// Local-only stacking order (like window focus on the desktop pins) — the
+// last note you clicked or dragged stays visually on top, even after the
+// interaction ends. Not synced; each client keeps its own order.
+let zCounter = 10;
+const noteZIndex = new Map();
+function bringToFront(id, card) {
+  zCounter += 1;
+  noteZIndex.set(id, zCounter);
+  card.style.zIndex = zCounter;
+}
 const animatingIds = new Set(); // notes mid-"stamp then move to bin" animation
 const defaultPosAssigned = new Set();
 
@@ -406,6 +425,17 @@ async function persistPosition(id, x, y, trackUndo = true) {
   }
 }
 
+async function persistSize(id, width, height) {
+  const before = notes.find((n) => n.id === id);
+  const { data, error } = await supa.from(TABLE).update({ width, height }).eq('id', id).select().single();
+  if (!error) {
+    notes = notes.map((n) => (n.id === data.id ? data : n));
+    if (before && (before.width !== width || before.height !== height)) {
+      pushUndo({ kind: 'size', id, before: { width: before.width, height: before.height }, after: { width, height } });
+    }
+  }
+}
+
 function renderBoard() {
   if (dragState || animatingIds.size) return; // don't rebuild the DOM mid-drag/animation
 
@@ -422,6 +452,8 @@ function renderBoard() {
   board.innerHTML = '';
   open.forEach((note, idx) => {
     const card = buildCard(note, true);
+    if (note.width) card.style.width = note.width + 'px';
+    if (note.height) card.style.height = note.height + 'px';
     board.appendChild(card); // append first so offsetWidth/offsetHeight are measurable for clamping
     let { pos_x: x, pos_y: y } = note;
     if (x == null || y == null) {
@@ -509,6 +541,16 @@ document.addEventListener('mousemove', (e) => {
     dragState.card.style.left = left + 'px';
     dragState.card.style.top = top + 'px';
     binIcon.classList.toggle('drag-over', dragState.moved && isOverBin(e.clientX, e.clientY));
+  } else if (resizeState) {
+    const dx = e.clientX - resizeState.startX;
+    const dy = e.clientY - resizeState.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) resizeState.moved = true;
+    const maxWidth = Math.max(NOTE_MIN_WIDTH, board.clientWidth - parseFloat(resizeState.card.style.left) - 4);
+    const maxHeight = Math.max(NOTE_MIN_HEIGHT, board.clientHeight - parseFloat(resizeState.card.style.top) - 4);
+    const width = Math.min(Math.max(NOTE_MIN_WIDTH, resizeState.startWidth + dx), Math.min(NOTE_MAX_WIDTH, maxWidth));
+    const height = Math.min(Math.max(NOTE_MIN_HEIGHT, resizeState.startHeight + dy), Math.min(NOTE_MAX_HEIGHT, maxHeight));
+    resizeState.card.style.width = width + 'px';
+    resizeState.card.style.height = height + 'px';
   } else if (reopenDrag) {
     const dx = e.clientX - reopenDrag.startX;
     const dy = e.clientY - reopenDrag.startY;
@@ -531,7 +573,6 @@ document.addEventListener('mouseup', (e) => {
   if (dragState) {
     const { id, card, moved } = dragState;
     card.classList.remove('dragging-card');
-    card.style.zIndex = '';
     binIcon.classList.remove('drag-over');
     if (moved && isOverBin(e.clientX, e.clientY)) {
       card.dataset.justDragged = '1';
@@ -541,6 +582,14 @@ document.addEventListener('mouseup', (e) => {
       persistPosition(id, parseFloat(card.style.left), parseFloat(card.style.top));
     }
     dragState = null;
+  } else if (resizeState) {
+    const { id, card, moved } = resizeState;
+    card.classList.remove('resizing-card');
+    if (moved) {
+      card.dataset.justDragged = '1';
+      persistSize(id, card.offsetWidth, card.offsetHeight);
+    }
+    resizeState = null;
   } else if (reopenDrag) {
     const { id, ghost, originalCard, moved } = reopenDrag;
     ghost.remove();
@@ -591,10 +640,12 @@ function buildCard(note, freeform) {
   card.style.backgroundColor = colors.bg;
   card.style.transform = `rotate(${rotationFor(note.id)}deg)`;
   if (imageOnly) card.title = note.work_name || '';
+  if (freeform && noteZIndex.has(note.id)) card.style.zIndex = noteZIndex.get(note.id);
 
   if (freeform) {
     card.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.pin-toggle')) return;
+      if (e.target.closest('.pin-toggle') || e.target.closest('.resize-handle')) return;
+      bringToFront(note.id, card);
       if (note.locked && !isAdmin) return;
       dragState = {
         id: note.id,
@@ -606,7 +657,6 @@ function buildCard(note, freeform) {
         moved: false,
       };
       card.classList.add('dragging-card');
-      card.style.zIndex = 1000;
     });
 
     card.addEventListener('click', () => {
@@ -616,6 +666,26 @@ function buildCard(note, freeform) {
       }
       openEditModal(note);
     });
+
+    const resizeHandle = document.createElement('div');
+    resizeHandle.className = 'resize-handle';
+    resizeHandle.title = 'Drag to resize';
+    resizeHandle.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      if (note.locked && !isAdmin) return;
+      bringToFront(note.id, card);
+      resizeState = {
+        id: note.id,
+        card,
+        startX: e.clientX,
+        startY: e.clientY,
+        startWidth: card.offsetWidth || NOTE_DEFAULT_WIDTH,
+        startHeight: card.offsetHeight || NOTE_DEFAULT_HEIGHT,
+        moved: false,
+      };
+      card.classList.add('resizing-card');
+    });
+    card.appendChild(resizeHandle);
   } else {
     // Done-pile cards: dragging them out onto the board reopens them;
     // a plain click (no movement) opens the detail modal instead.
@@ -991,17 +1061,26 @@ async function fetchNotes() {
   renderBoard();
 }
 
-function applyRealtimeChange(payload) {
-  if (payload.eventType === 'INSERT') {
-    if (!notes.some((n) => n.id === payload.new.id)) notes.push(payload.new);
-  } else if (payload.eventType === 'UPDATE') {
-    notes = notes.map((n) => (n.id === payload.new.id ? payload.new : n));
-    if (pinnedIds.has(payload.new.id)) {
-      if (payload.new.status === 'done') {
-        window.pinAPI.close(payload.new.id);
-        pinnedIds.delete(payload.new.id);
+async function applyRealtimeChange(payload) {
+  if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+    // Realtime's postgres_changes broadcast has a payload size cap, so a
+    // note carrying a large base64 image can arrive here with image_data
+    // silently missing even though it saved fine — re-fetch the row
+    // directly (a plain select has no such limit) instead of trusting
+    // payload.new for the note's contents.
+    const { data, error } = await supa.from(TABLE).select('*').eq('id', payload.new.id).single();
+    if (error || !data) return;
+    if (payload.eventType === 'INSERT') {
+      if (!notes.some((n) => n.id === data.id)) notes.push(data);
+    } else {
+      notes = notes.map((n) => (n.id === data.id ? data : n));
+    }
+    if (pinnedIds.has(data.id)) {
+      if (data.status === 'done') {
+        window.pinAPI.close(data.id);
+        pinnedIds.delete(data.id);
       } else {
-        window.pinAPI.refresh(payload.new);
+        window.pinAPI.refresh(data);
       }
     }
   } else if (payload.eventType === 'DELETE') {
@@ -1024,8 +1103,19 @@ function subscribeRealtime() {
       purgeExpiredDone();
     })
     .subscribe((status) => {
-      if (status === 'SUBSCRIBED') setConnStatus('ok', 'live');
-      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnStatus('error', 'offline');
+      if (status === 'SUBSCRIBED') {
+        setConnStatus('ok', 'live');
+        // Re-sync from scratch every time we (re)connect, not just on first
+        // load — if the socket dropped and reconnected (sleep/wake, flaky
+        // office wifi/VPN), any changes made by others during the gap are
+        // gone forever otherwise, since postgres_changes doesn't replay
+        // missed events. Without this, a note moved on another PC while
+        // this client was briefly disconnected would look "stuck" here
+        // until the whole app was restarted.
+        if (!dragState && !resizeState) fetchNotes();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        setConnStatus('error', 'offline');
+      }
     });
 }
 
