@@ -452,8 +452,13 @@ function renderBoard() {
   board.innerHTML = '';
   open.forEach((note, idx) => {
     const card = buildCard(note, true);
-    if (note.width) card.style.width = note.width + 'px';
-    if (note.height) card.style.height = note.height + 'px';
+    // Always set an explicit size (not just min-height) — otherwise an
+    // image-only card's height falls back to auto and follows that photo's
+    // own aspect ratio, so notes end up visibly different sizes from each
+    // other despite never having been resized. Every note should start at
+    // the same default size and only change when deliberately resized.
+    card.style.width = (note.width || NOTE_DEFAULT_WIDTH) + 'px';
+    card.style.height = (note.height || NOTE_DEFAULT_HEIGHT) + 'px';
     board.appendChild(card); // append first so offsetWidth/offsetHeight are measurable for clamping
     let { pos_x: x, pos_y: y } = note;
     if (x == null || y == null) {
