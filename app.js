@@ -31,6 +31,7 @@ const binIcon = document.getElementById('bin-icon');
 const stampTool = document.getElementById('stamp-tool');
 const doneCountBadge = document.getElementById('done-count-badge');
 const connStatus = document.getElementById('conn-status');
+const btnRefresh = document.getElementById('btn-refresh');
 
 const btnBoardPrev = document.getElementById('btn-board-prev');
 const btnBoardNext = document.getElementById('btn-board-next');
@@ -1326,22 +1327,19 @@ async function applyRealtimeChange(payload) {
 }
 
 function subscribeRealtime() {
+  // Each table gets its OWN channel/subscription, deliberately not bundled
+  // together on one channel. Confirmed by testing directly against the
+  // project: if ANY table bound to a channel isn't in the Realtime
+  // publication (e.g. someone forgot to flip its Replication toggle in the
+  // Supabase dashboard), the WHOLE channel silently stops delivering
+  // events for every table on it — .subscribe() still reports SUBSCRIBED
+  // with no error, so nothing here would even know sync had gone dark.
+  // Splitting into independent channels means a misconfigured/forgotten
+  // pinboard_boards or pinboard_settings toggle can't take down note sync,
+  // which is the one that matters most.
   supa
     .channel('pinboard_notes_changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, applyRealtimeChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: SETTINGS_TABLE }, (payload) => {
-      if (payload.new) boardSettings = payload.new;
-      updateTrashRetentionLabel();
-      purgeExpiredDone();
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: BOARDS_TABLE }, async () => {
-      // Someone added/renamed/deleted a board on another PC — refresh the
-      // list; fetchBoards() itself falls back to another board if the one
-      // we were looking at just got deleted out from under us.
-      const wasCurrent = currentBoardId;
-      await fetchBoards();
-      if (currentBoardId !== wasCurrent) await fetchNotes();
-    })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         setConnStatus('ok', 'live');
@@ -1357,6 +1355,27 @@ function subscribeRealtime() {
         setConnStatus('error', 'offline');
       }
     });
+
+  supa
+    .channel('pinboard_settings_changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: SETTINGS_TABLE }, (payload) => {
+      if (payload.new) boardSettings = payload.new;
+      updateTrashRetentionLabel();
+      purgeExpiredDone();
+    })
+    .subscribe();
+
+  supa
+    .channel('pinboard_boards_changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: BOARDS_TABLE }, async () => {
+      // Someone added/renamed/deleted a board on another PC — refresh the
+      // list; fetchBoards() itself falls back to another board if the one
+      // we were looking at just got deleted out from under us.
+      const wasCurrent = currentBoardId;
+      await fetchBoards();
+      if (currentBoardId !== wasCurrent) await fetchNotes();
+    })
+    .subscribe();
 }
 
 // ---------- wiring ----------
@@ -1370,6 +1389,21 @@ btnBoardNameCancel.addEventListener('click', closeBoardNameModal);
 btnBoardNameSave.addEventListener('click', submitBoardName);
 fBoardName.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitBoardName(); });
 boardNameModal.addEventListener('click', (e) => { if (e.target === boardNameModal) closeBoardNameModal(); });
+
+// Manual fallback for when Realtime sync isn't actually live despite the
+// "live" status — that status only reflects a successful websocket
+// subscribe, not that events are actually flowing (a misconfigured
+// publication can silently break delivery without ever erroring out).
+btnRefresh.addEventListener('click', async () => {
+  if (btnRefresh.classList.contains('spinning')) return;
+  btnRefresh.classList.add('spinning');
+  try {
+    await fetchBoards();
+    await Promise.all([fetchNotes(), fetchSettings()]);
+  } finally {
+    btnRefresh.classList.remove('spinning');
+  }
+});
 
 btnNew.addEventListener('click', openNewModal);
 btnCancel.addEventListener('click', closeModal);

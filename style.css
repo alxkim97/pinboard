@@ -103,6 +103,14 @@ body {
 }
 .board-delete-btn:hover { opacity: 1; background: rgba(192,67,47,0.35); }
 
+#btn-refresh.spinning {
+  animation: btn-refresh-spin 0.7s linear infinite;
+}
+@keyframes btn-refresh-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .conn-status {
   font-size: 12px;
   padding: 3px 10px;
