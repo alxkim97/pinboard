@@ -28,9 +28,50 @@ alter table pinboard_notes add column if not exists locked boolean not null defa
 alter table pinboard_notes add column if not exists image_data text;
 
 -- Per-note size on the board, set by dragging the resize handle. Null means
--- "use the default 200x180 card size".
+-- "use the default 200x200 card size".
 alter table pinboard_notes add column if not exists width double precision;
 alter table pinboard_notes add column if not exists height double precision;
+
+-- Multiple boards (e.g. separate boards per team/area), switchable in the
+-- topbar. Every existing/new note belongs to exactly one board.
+create table if not exists pinboard_boards (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now()
+);
+
+-- Seed one default board so existing installs (and their existing notes)
+-- have somewhere to land — fixed id so the backfill below can target it
+-- reliably no matter when this script is (re-)run.
+insert into pinboard_boards (id, name, sort_order)
+values ('00000000-0000-0000-0000-000000000001', 'Main', 0)
+on conflict (id) do nothing;
+
+alter table pinboard_notes add column if not exists board_id uuid references pinboard_boards(id) on delete cascade;
+update pinboard_notes set board_id = '00000000-0000-0000-0000-000000000001' where board_id is null;
+
+alter table pinboard_boards enable row level security;
+
+drop policy if exists "anyone can read boards" on pinboard_boards;
+create policy "anyone can read boards"
+  on pinboard_boards for select
+  using (true);
+
+drop policy if exists "anyone can insert boards" on pinboard_boards;
+create policy "anyone can insert boards"
+  on pinboard_boards for insert
+  with check (true);
+
+drop policy if exists "anyone can update boards" on pinboard_boards;
+create policy "anyone can update boards"
+  on pinboard_boards for update
+  using (true);
+
+drop policy if exists "anyone can delete boards" on pinboard_boards;
+create policy "anyone can delete boards"
+  on pinboard_boards for delete
+  using (true);
 
 -- Shared team board, no per-user login — anyone with the anon key can read/write.
 -- (Same trust model as WorkLog: access control is "only people who run this app
@@ -111,6 +152,6 @@ create trigger pinboard_settings_set_updated_at
   execute function pinboard_set_updated_at();
 
 -- IMPORTANT — Realtime: after running this, go to
--- Database → Replication → and toggle BOTH "pinboard_notes" and
--- "pinboard_settings" ON so other PCs see changes (and trash-retention
--- edits) live without needing to refresh.
+-- Database → Replication → and toggle "pinboard_notes", "pinboard_settings",
+-- AND "pinboard_boards" ON so other PCs see changes (notes, trash-retention
+-- edits, and board add/rename/delete) live without needing to refresh.

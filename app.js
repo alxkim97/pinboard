@@ -6,6 +6,8 @@ const SUPA_URL = 'https://uhlbrxyvhfmfeakckzlu.supabase.co';
 const SUPA_KEY = 'sb_publishable_ddVyqs4A4o9j2WsUkDHeZQ_6UskvhMg';
 const TABLE = 'pinboard_notes';
 const SETTINGS_TABLE = 'pinboard_settings';
+const BOARDS_TABLE = 'pinboard_boards';
+const CURRENT_BOARD_KEY = 'pinboard_current_board_id'; // per-PC, like pin positions — not synced
 
 const supa = supabase.createClient(SUPA_URL, SUPA_KEY);
 
@@ -14,6 +16,8 @@ const supa = supabase.createClient(SUPA_URL, SUPA_KEY);
 const ADMIN_PIN = 'alex456';
 
 let notes = [];
+let boards = [];
+let currentBoardId = null;
 let pinnedIds = new Set();
 let isAdmin = false;
 let undoStack = [];
@@ -28,6 +32,12 @@ const stampTool = document.getElementById('stamp-tool');
 const doneCountBadge = document.getElementById('done-count-badge');
 const connStatus = document.getElementById('conn-status');
 
+const btnBoardPrev = document.getElementById('btn-board-prev');
+const btnBoardNext = document.getElementById('btn-board-next');
+const btnBoardAdd = document.getElementById('btn-board-add');
+const btnBoardDelete = document.getElementById('btn-board-delete');
+const boardNameBtn = document.getElementById('board-name-btn');
+
 const modal = document.getElementById('note-modal');
 const modalTitle = document.getElementById('modal-title');
 const modalError = document.getElementById('modal-error');
@@ -36,6 +46,7 @@ const fDueDate = document.getElementById('f-due-date');
 const fOperator = document.getElementById('f-operator');
 const fRequestedBy = document.getElementById('f-requested-by');
 const fDetail = document.getElementById('f-detail');
+const fBoard = document.getElementById('f-board');
 const imageDropzone = document.getElementById('image-dropzone');
 const imagePreview = document.getElementById('image-preview');
 const imageDropzonePlaceholder = document.getElementById('image-dropzone-placeholder');
@@ -142,6 +153,7 @@ function setConnStatus(state, text) {
 // client-side before upload so a photo from a phone doesn't bloat the row.
 
 let pendingImageData = null; // data URI for the note currently open in the modal, or null
+let pendingImageDims = null; // { width, height } of pendingImageData, used to size a brand-new note
 let imageFieldLocked = false;
 
 const IMAGE_MAX_DIM = 1000;
@@ -165,7 +177,7 @@ function readAndCompressImage(file) {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY));
+        resolve({ dataUrl: canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY), width, height });
       };
       img.src = reader.result;
     };
@@ -190,7 +202,9 @@ function updateImagePreview() {
 async function handleImageFile(file) {
   if (imageFieldLocked || !file || !file.type.startsWith('image/')) return;
   try {
-    pendingImageData = await readAndCompressImage(file);
+    const result = await readAndCompressImage(file);
+    pendingImageData = result.dataUrl;
+    pendingImageDims = { width: result.width, height: result.height };
     updateImagePreview();
   } catch (err) {
     showError(err.message || 'Could not load that image.');
@@ -221,6 +235,7 @@ imageDropzone.addEventListener('drop', (e) => {
 btnRemoveImage.addEventListener('click', (e) => {
   e.stopPropagation();
   pendingImageData = null;
+  pendingImageDims = null;
   updateImagePreview();
 });
 document.addEventListener('paste', (e) => {
@@ -264,23 +279,27 @@ board.addEventListener('drop', (e) => {
 });
 
 async function createNoteFromDroppedImage(file, x, y) {
-  let imageData;
+  let result;
   try {
-    imageData = await readAndCompressImage(file);
+    result = await readAndCompressImage(file);
   } catch (err) {
     showError(err.message || 'Could not load that image.');
     return;
   }
-  const clamped = clampToBoard(x, y, 200, 180);
+  const { width, height } = defaultSizeForImage(result);
+  const clamped = clampToBoard(x, y, width, height);
   const payload = {
     work_name: file.name.replace(/\.[^.]+$/, '').trim() || 'New Note',
     due_date: null,
     operator: null,
     requested_by: null,
     detail: null,
-    image_data: imageData,
+    image_data: result.dataUrl,
     pos_x: clamped.x,
     pos_y: clamped.y,
+    width,
+    height,
+    board_id: currentBoardId,
   };
   try {
     const { data, error } = await supa.from(TABLE).insert(payload).select().single();
@@ -301,12 +320,23 @@ let resizeState = null; // { id, card, startX, startY, startWidth, startHeight, 
 let reopenDrag = null; // { id, ghost, startX, startY, moved }
 let stampDrag = null; // { ghost, targetCard }
 
+// A text note is always a square; an image note starts sized to that
+// photo's own aspect ratio. Both stay locked to that shape when resized —
+// only the overall scale changes — see the resize handle's mousedown/
+// mousemove handlers below.
 const NOTE_DEFAULT_WIDTH = 200;
-const NOTE_DEFAULT_HEIGHT = 180;
+const NOTE_DEFAULT_HEIGHT = 200;
 const NOTE_MIN_WIDTH = 140;
 const NOTE_MIN_HEIGHT = 120;
 const NOTE_MAX_WIDTH = 520;
 const NOTE_MAX_HEIGHT = 520;
+
+function defaultSizeForImage(dims) {
+  const width = NOTE_DEFAULT_WIDTH;
+  const ratio = dims.width / dims.height;
+  const height = Math.min(NOTE_MAX_HEIGHT, Math.max(NOTE_MIN_HEIGHT, width / ratio));
+  return { width, height };
+}
 
 // Local-only stacking order (like window focus on the desktop pins) — the
 // last note you clicked or dragged stays visually on top, even after the
@@ -382,7 +412,11 @@ async function revertAction(action, toBefore) {
     const fields = toBefore ? action.before : action.after;
     const { data, error } = await supa.from(TABLE).update(fields).eq('id', id).select().single();
     if (error) throw error;
-    notes = notes.map((n) => (n.id === data.id ? data : n));
+    // A board-move undo/redo can put the note on (or take it off) the
+    // board we're currently looking at.
+    notes = data.board_id === currentBoardId
+      ? notes.map((n) => (n.id === data.id ? data : n))
+      : notes.filter((n) => n.id !== data.id);
     if (pinnedIds.has(id)) window.pinAPI.refresh(data);
   }
   renderBoard();
@@ -550,10 +584,26 @@ document.addEventListener('mousemove', (e) => {
     const dx = e.clientX - resizeState.startX;
     const dy = e.clientY - resizeState.startY;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) resizeState.moved = true;
-    const maxWidth = Math.max(NOTE_MIN_WIDTH, board.clientWidth - parseFloat(resizeState.card.style.left) - 4);
-    const maxHeight = Math.max(NOTE_MIN_HEIGHT, board.clientHeight - parseFloat(resizeState.card.style.top) - 4);
-    const width = Math.min(Math.max(NOTE_MIN_WIDTH, resizeState.startWidth + dx), Math.min(NOTE_MAX_WIDTH, maxWidth));
-    const height = Math.min(Math.max(NOTE_MIN_HEIGHT, resizeState.startHeight + dy), Math.min(NOTE_MAX_HEIGHT, maxHeight));
+    const maxWidth = Math.min(NOTE_MAX_WIDTH, Math.max(NOTE_MIN_WIDTH, board.clientWidth - parseFloat(resizeState.card.style.left) - 4));
+    const maxHeight = Math.min(NOTE_MAX_HEIGHT, Math.max(NOTE_MIN_HEIGHT, board.clientHeight - parseFloat(resizeState.card.style.top) - 4));
+    const ratio = resizeState.aspect || 1;
+    // Scale from whichever axis the pointer moved further along, then
+    // derive the other dimension from the locked aspect ratio, so the note
+    // grows/shrinks as a whole instead of stretching out of shape.
+    let width, height;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      width = resizeState.startWidth + dx;
+      height = width / ratio;
+    } else {
+      height = resizeState.startHeight + dy;
+      width = height * ratio;
+    }
+    width = Math.max(NOTE_MIN_WIDTH, width);
+    height = width / ratio;
+    if (height < NOTE_MIN_HEIGHT) { height = NOTE_MIN_HEIGHT; width = height * ratio; }
+    if (width > maxWidth) { width = maxWidth; height = width / ratio; }
+    if (height > maxHeight) { height = maxHeight; width = height * ratio; }
+    if (width > maxWidth) { width = maxWidth; height = width / ratio; }
     resizeState.card.style.width = width + 'px';
     resizeState.card.style.height = height + 'px';
   } else if (reopenDrag) {
@@ -679,6 +729,13 @@ function buildCard(note, freeform) {
       e.stopPropagation();
       if (note.locked && !isAdmin) return;
       bringToFront(note.id, card);
+      // A text note keeps a 1:1 shape; an image note keeps that photo's own
+      // aspect ratio — read straight off the loaded <img> rather than
+      // trusting stale card.offsetWidth/Height math, so it can't drift.
+      const thumb = card.querySelector('.note-thumb');
+      const aspect = imageOnly && thumb && thumb.naturalWidth && thumb.naturalHeight
+        ? thumb.naturalWidth / thumb.naturalHeight
+        : 1;
       resizeState = {
         id: note.id,
         card,
@@ -686,6 +743,7 @@ function buildCard(note, freeform) {
         startY: e.clientY,
         startWidth: card.offsetWidth || NOTE_DEFAULT_WIDTH,
         startHeight: card.offsetHeight || NOTE_DEFAULT_HEIGHT,
+        aspect,
         moved: false,
       };
       card.classList.add('resizing-card');
@@ -804,8 +862,10 @@ function openNewModal() {
   fOperator.value = '';
   fRequestedBy.value = '';
   fDetail.value = '';
+  fBoard.value = currentBoardId;
   [fWorkName, fDueDate, fOperator, fRequestedBy, fDetail].forEach((el) => { el.disabled = false; });
   pendingImageData = null;
+  pendingImageDims = null;
   imageFieldLocked = false;
   imageDropzone.classList.remove('disabled');
   updateImagePreview();
@@ -828,6 +888,7 @@ function openEditModal(note) {
   fOperator.value = note.operator || '';
   fRequestedBy.value = note.requested_by || '';
   fDetail.value = note.detail || '';
+  fBoard.value = note.board_id || currentBoardId;
   hideError();
   btnDelete.classList.remove('hidden');
   if (note.status === 'done') {
@@ -843,6 +904,7 @@ function openEditModal(note) {
     el.disabled = lockedForMe;
   });
   pendingImageData = note.image_data || null;
+  pendingImageDims = null; // only used to size a brand-new note, not relevant when editing
   imageFieldLocked = lockedForMe;
   imageDropzone.classList.toggle('disabled', lockedForMe);
   updateImagePreview();
@@ -904,7 +966,14 @@ async function saveNote() {
     requested_by: fRequestedBy.value.trim() || null,
     detail: fDetail.value.trim() || null,
     image_data: pendingImageData,
+    board_id: fBoard.value,
   };
+  if (!editingId) {
+    // A brand-new note gets its starting size now — an image note sized to
+    // that photo's aspect ratio, a text note square — rather than leaving
+    // it to render time (see NOTE_DEFAULT_WIDTH/HEIGHT above).
+    Object.assign(payload, pendingImageDims ? defaultSizeForImage(pendingImageDims) : { width: NOTE_DEFAULT_WIDTH, height: NOTE_DEFAULT_HEIGHT });
+  }
 
   btnSave.disabled = true;
   try {
@@ -912,7 +981,11 @@ async function saveNote() {
       const before = notes.find((n) => n.id === editingId);
       const { data, error } = await supa.from(TABLE).update(payload).eq('id', editingId).select().single();
       if (error) throw error;
-      notes = notes.map((n) => (n.id === data.id ? data : n));
+      // If it was just moved to a different board, it no longer belongs on
+      // the one we're currently looking at.
+      notes = data.board_id === currentBoardId
+        ? notes.map((n) => (n.id === data.id ? data : n))
+        : notes.filter((n) => n.id !== data.id);
       if (before) {
         pushUndo({
           kind: 'edit',
@@ -924,6 +997,7 @@ async function saveNote() {
             requested_by: before.requested_by,
             detail: before.detail,
             image_data: before.image_data,
+            board_id: before.board_id,
           },
           after: payload,
         });
@@ -931,7 +1005,7 @@ async function saveNote() {
     } else {
       const { data, error } = await supa.from(TABLE).insert(payload).select().single();
       if (error) throw error;
-      notes.push(data);
+      if (data.board_id === currentBoardId) notes.push(data);
       pushUndo({ kind: 'create', id: data.id, data });
     }
     renderBoard();
@@ -1053,10 +1127,119 @@ async function purgeExpiredDone() {
   renderBoard();
 }
 
+// ---------- boards ----------
+// Multiple named boards, switchable via the topbar. Which board is
+// currently open is local-per-PC (like pin positions), not synced — each
+// person can be looking at a different board. The board list itself
+// (names, order) IS shared/synced, same trust model as everything else.
+
+function updateBoardSwitcherUI() {
+  const current = boards.find((b) => b.id === currentBoardId);
+  boardNameBtn.textContent = current ? current.name : '—';
+  const multiple = boards.length > 1;
+  btnBoardPrev.disabled = !multiple;
+  btnBoardNext.disabled = !multiple;
+  btnBoardDelete.disabled = !multiple;
+}
+
+async function fetchBoards() {
+  const { data, error } = await supa.from(BOARDS_TABLE).select('*').order('sort_order').order('created_at');
+  if (error) {
+    console.error(error);
+    return;
+  }
+  boards = data;
+  if (!boards.length) return; // shouldn't happen — the SQL setup always seeds one
+  if (!boards.some((b) => b.id === currentBoardId)) {
+    const saved = localStorage.getItem(CURRENT_BOARD_KEY);
+    currentBoardId = boards.some((b) => b.id === saved) ? saved : boards[0].id;
+    localStorage.setItem(CURRENT_BOARD_KEY, currentBoardId);
+  }
+  updateBoardSwitcherUI();
+  populateBoardSelect();
+}
+
+function populateBoardSelect() {
+  fBoard.innerHTML = '';
+  boards.forEach((b) => {
+    const opt = document.createElement('option');
+    opt.value = b.id;
+    opt.textContent = b.name;
+    fBoard.appendChild(opt);
+  });
+}
+
+async function switchToBoard(id) {
+  if (id === currentBoardId) return;
+  currentBoardId = id;
+  localStorage.setItem(CURRENT_BOARD_KEY, id);
+  updateBoardSwitcherUI();
+  donePanel.classList.add('hidden');
+  await fetchNotes();
+}
+
+function cycleBoard(delta) {
+  if (boards.length < 2) return;
+  const idx = boards.findIndex((b) => b.id === currentBoardId);
+  const next = boards[(idx + delta + boards.length) % boards.length];
+  switchToBoard(next.id);
+}
+
+async function addBoard() {
+  const name = window.prompt('New board name:');
+  if (!name || !name.trim()) return;
+  const maxOrder = boards.reduce((m, b) => Math.max(m, b.sort_order), -1);
+  const { data, error } = await supa.from(BOARDS_TABLE).insert({ name: name.trim(), sort_order: maxOrder + 1 }).select().single();
+  if (error) {
+    showBoardError(error.message || 'Failed to create board.');
+    return;
+  }
+  boards.push(data);
+  switchToBoard(data.id);
+  updateBoardSwitcherUI();
+  populateBoardSelect();
+}
+
+async function renameCurrentBoard() {
+  const current = boards.find((b) => b.id === currentBoardId);
+  if (!current) return;
+  const name = window.prompt('Rename board:', current.name);
+  if (!name || !name.trim() || name.trim() === current.name) return;
+  const { data, error } = await supa.from(BOARDS_TABLE).update({ name: name.trim() }).eq('id', current.id).select().single();
+  if (error) {
+    showBoardError(error.message || 'Failed to rename board.');
+    return;
+  }
+  boards = boards.map((b) => (b.id === data.id ? data : b));
+  updateBoardSwitcherUI();
+  populateBoardSelect();
+}
+
+async function deleteCurrentBoard() {
+  if (boards.length < 2) return; // always keep at least one board
+  const current = boards.find((b) => b.id === currentBoardId);
+  if (!current) return;
+  if (!window.confirm(`Delete "${current.name}" and all its notes? This can't be undone.`)) return;
+  const { error } = await supa.from(BOARDS_TABLE).delete().eq('id', current.id);
+  if (error) {
+    showBoardError(error.message || 'Failed to delete board.');
+    return;
+  }
+  boards = boards.filter((b) => b.id !== current.id);
+  await switchToBoard(boards[0].id);
+  updateBoardSwitcherUI();
+  populateBoardSelect();
+}
+
+function showBoardError(msg) {
+  window.alert(msg);
+}
+
 // ---------- data sync ----------
 
 async function fetchNotes() {
-  const { data, error } = await supa.from(TABLE).select('*');
+  if (!currentBoardId) return;
+  const { data, error } = await supa.from(TABLE).select('*').eq('board_id', currentBoardId);
   if (error) {
     setConnStatus('error', 'load failed');
     console.error(error);
@@ -1075,10 +1258,14 @@ async function applyRealtimeChange(payload) {
     // payload.new for the note's contents.
     const { data, error } = await supa.from(TABLE).select('*').eq('id', payload.new.id).single();
     if (error || !data) return;
-    if (payload.eventType === 'INSERT') {
-      if (!notes.some((n) => n.id === data.id)) notes.push(data);
-    } else {
-      notes = notes.map((n) => (n.id === data.id ? data : n));
+    const idx = notes.findIndex((n) => n.id === data.id);
+    if (data.board_id === currentBoardId) {
+      if (idx === -1) notes.push(data);
+      else notes[idx] = data;
+    } else if (idx !== -1) {
+      // Moved to a different board (e.g. via the modal's board picker) —
+      // it no longer belongs on the board we're currently looking at.
+      notes.splice(idx, 1);
     }
     if (pinnedIds.has(data.id)) {
       if (data.status === 'done') {
@@ -1107,6 +1294,14 @@ function subscribeRealtime() {
       updateTrashRetentionLabel();
       purgeExpiredDone();
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: BOARDS_TABLE }, async () => {
+      // Someone added/renamed/deleted a board on another PC — refresh the
+      // list; fetchBoards() itself falls back to another board if the one
+      // we were looking at just got deleted out from under us.
+      const wasCurrent = currentBoardId;
+      await fetchBoards();
+      if (currentBoardId !== wasCurrent) await fetchNotes();
+    })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         setConnStatus('ok', 'live');
@@ -1125,6 +1320,12 @@ function subscribeRealtime() {
 }
 
 // ---------- wiring ----------
+
+btnBoardPrev.addEventListener('click', () => cycleBoard(-1));
+btnBoardNext.addEventListener('click', () => cycleBoard(1));
+btnBoardAdd.addEventListener('click', addBoard);
+btnBoardDelete.addEventListener('click', deleteCurrentBoard);
+boardNameBtn.addEventListener('click', renameCurrentBoard);
 
 btnNew.addEventListener('click', openNewModal);
 btnCancel.addEventListener('click', closeModal);
@@ -1237,7 +1438,7 @@ window.pinAPI.version().then((v) => {
 });
 
 setConnStatus('unknown', 'connecting…');
-Promise.all([fetchNotes(), fetchSettings()]).then(() => {
+fetchBoards().then(() => Promise.all([fetchNotes(), fetchSettings()])).then(() => {
   subscribeRealtime();
   restorePins();
   purgeExpiredDone();

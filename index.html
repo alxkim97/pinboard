@@ -13,6 +13,13 @@
     <h1>📌 Pinboard <span id="app-version" class="app-version"></span></h1>
     <div id="board-subtitle">Alex Kim — R&D Department / แผนกวิจัยและพัฒนา</div>
   </div>
+  <div id="board-switcher">
+    <button id="btn-board-prev" class="board-nav-btn" title="Previous board">‹</button>
+    <button id="board-name-btn" class="board-name-btn" title="Click to rename this board">Board</button>
+    <button id="btn-board-next" class="board-nav-btn" title="Next board">›</button>
+    <button id="btn-board-add" class="board-nav-btn" title="Add a new board">+</button>
+    <button id="btn-board-delete" class="board-nav-btn board-delete-btn" title="Delete this board">🗑</button>
+  </div>
   <div id="conn-status" class="conn-status conn-unknown">connecting…</div>
   <div class="spacer"></div>
   <button id="btn-undo" class="btn-secondary" title="Undo / ย้อนกลับ (Ctrl+Z)" disabled>↶ Undo</button>
@@ -77,6 +84,9 @@
         <input id="f-operator" type="text" maxlength="60" placeholder="who's doing it / ใครทำ" />
       </label>
     </div>
+    <label>Board / บอร์ด
+      <select id="f-board"></select>
+    </label>
     <label>Requested by / ผู้ขอ
       <input id="f-requested-by" type="text" maxlength="60" />
     </label>

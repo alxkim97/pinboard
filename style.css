@@ -67,6 +67,42 @@ body {
   cursor: not-allowed;
 }
 
+#board-switcher {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 3px;
+}
+.board-nav-btn {
+  background: transparent;
+  color: #f3e9dc;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+}
+.board-nav-btn:hover { background: rgba(255,255,255,0.15); }
+.board-name-btn {
+  background: transparent;
+  color: #f3e9dc;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-name-btn:hover { background: rgba(255,255,255,0.15); }
+.board-delete-btn {
+  margin-left: 6px;
+  opacity: 0.6;
+}
+.board-delete-btn:hover { opacity: 1; background: rgba(192,67,47,0.35); }
+
 .conn-status {
   font-size: 12px;
   padding: 3px 10px;
@@ -184,10 +220,10 @@ button:disabled {
   position: absolute;
   right: 0;
   bottom: 0;
-  width: 18px;
-  height: 18px;
+  width: 34px;
+  height: 34px;
   cursor: nwse-resize;
-  opacity: 0;
+  opacity: 0.32;
 }
 #board .note-card:hover .resize-handle,
 #board .note-card.resizing-card .resize-handle {
@@ -196,12 +232,12 @@ button:disabled {
 .resize-handle::before {
   content: '';
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid rgba(0,0,0,0.4);
-  border-bottom: 2px solid rgba(0,0,0,0.4);
+  right: 7px;
+  bottom: 7px;
+  width: 14px;
+  height: 14px;
+  border-right: 3px solid rgba(0,0,0,0.45);
+  border-bottom: 3px solid rgba(0,0,0,0.45);
 }
 .note-card:hover {
   transform: scale(1.04) rotate(0deg) !important;
