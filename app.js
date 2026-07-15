@@ -38,6 +38,13 @@ const btnBoardAdd = document.getElementById('btn-board-add');
 const btnBoardDelete = document.getElementById('btn-board-delete');
 const boardNameBtn = document.getElementById('board-name-btn');
 
+const boardNameModal = document.getElementById('board-name-modal');
+const boardNameModalTitle = document.getElementById('board-name-modal-title');
+const fBoardName = document.getElementById('f-board-name');
+const boardNameError = document.getElementById('board-name-error');
+const btnBoardNameCancel = document.getElementById('btn-board-name-cancel');
+const btnBoardNameSave = document.getElementById('btn-board-name-save');
+
 const modal = document.getElementById('note-modal');
 const modalTitle = document.getElementById('modal-title');
 const modalError = document.getElementById('modal-error');
@@ -1185,54 +1192,87 @@ function cycleBoard(delta) {
   switchToBoard(next.id);
 }
 
-async function addBoard() {
-  const name = window.prompt('New board name:');
-  if (!name || !name.trim()) return;
-  const maxOrder = boards.reduce((m, b) => Math.max(m, b.sort_order), -1);
-  const { data, error } = await supa.from(BOARDS_TABLE).insert({ name: name.trim(), sort_order: maxOrder + 1 }).select().single();
-  if (error) {
-    showBoardError(error.message || 'Failed to create board.');
-    return;
-  }
-  boards.push(data);
-  switchToBoard(data.id);
-  updateBoardSwitcherUI();
-  populateBoardSelect();
-}
+// Electron doesn't implement window.prompt() (it silently does nothing),
+// so add/rename use their own small modal instead — see board-name-modal
+// below and its wiring.
+let boardNameModalMode = null; // 'add' | 'rename'
 
-async function renameCurrentBoard() {
+function openBoardNameModal(mode) {
+  boardNameModalMode = mode;
   const current = boards.find((b) => b.id === currentBoardId);
-  if (!current) return;
-  const name = window.prompt('Rename board:', current.name);
-  if (!name || !name.trim() || name.trim() === current.name) return;
-  const { data, error } = await supa.from(BOARDS_TABLE).update({ name: name.trim() }).eq('id', current.id).select().single();
-  if (error) {
-    showBoardError(error.message || 'Failed to rename board.');
-    return;
-  }
-  boards = boards.map((b) => (b.id === data.id ? data : b));
-  updateBoardSwitcherUI();
-  populateBoardSelect();
+  boardNameModalTitle.textContent = mode === 'add' ? 'New Board / บอร์ดใหม่' : 'Rename Board / เปลี่ยนชื่อบอร์ด';
+  fBoardName.value = mode === 'rename' && current ? current.name : '';
+  boardNameError.classList.add('hidden');
+  boardNameModal.classList.remove('hidden');
+  fBoardName.focus();
 }
 
-async function deleteCurrentBoard() {
+function closeBoardNameModal() {
+  boardNameModal.classList.add('hidden');
+  boardNameModalMode = null;
+}
+
+function showBoardNameError(msg) {
+  boardNameError.textContent = msg;
+  boardNameError.classList.remove('hidden');
+}
+
+async function submitBoardName() {
+  const name = fBoardName.value.trim();
+  if (!name) {
+    showBoardNameError('Board name is required.');
+    return;
+  }
+  if (boardNameModalMode === 'add') {
+    const maxOrder = boards.reduce((m, b) => Math.max(m, b.sort_order), -1);
+    const { data, error } = await supa.from(BOARDS_TABLE).insert({ name, sort_order: maxOrder + 1 }).select().single();
+    if (error) {
+      showBoardNameError(error.message || 'Failed to create board.');
+      return;
+    }
+    boards.push(data);
+    await switchToBoard(data.id);
+    updateBoardSwitcherUI();
+    populateBoardSelect();
+  } else if (boardNameModalMode === 'rename') {
+    const current = boards.find((b) => b.id === currentBoardId);
+    if (!current) return;
+    if (name !== current.name) {
+      const { data, error } = await supa.from(BOARDS_TABLE).update({ name }).eq('id', current.id).select().single();
+      if (error) {
+        showBoardNameError(error.message || 'Failed to rename board.');
+        return;
+      }
+      boards = boards.map((b) => (b.id === data.id ? data : b));
+      updateBoardSwitcherUI();
+      populateBoardSelect();
+    }
+  }
+  closeBoardNameModal();
+}
+
+function deleteCurrentBoard() {
   if (boards.length < 2) return; // always keep at least one board
+  if (!isAdmin) {
+    openPinModal(deleteCurrentBoard);
+    return;
+  }
+  reallyDeleteCurrentBoard();
+}
+
+async function reallyDeleteCurrentBoard() {
   const current = boards.find((b) => b.id === currentBoardId);
   if (!current) return;
   if (!window.confirm(`Delete "${current.name}" and all its notes? This can't be undone.`)) return;
   const { error } = await supa.from(BOARDS_TABLE).delete().eq('id', current.id);
   if (error) {
-    showBoardError(error.message || 'Failed to delete board.');
+    window.alert(error.message || 'Failed to delete board.');
     return;
   }
   boards = boards.filter((b) => b.id !== current.id);
   await switchToBoard(boards[0].id);
   updateBoardSwitcherUI();
   populateBoardSelect();
-}
-
-function showBoardError(msg) {
-  window.alert(msg);
 }
 
 // ---------- data sync ----------
@@ -1323,9 +1363,13 @@ function subscribeRealtime() {
 
 btnBoardPrev.addEventListener('click', () => cycleBoard(-1));
 btnBoardNext.addEventListener('click', () => cycleBoard(1));
-btnBoardAdd.addEventListener('click', addBoard);
+btnBoardAdd.addEventListener('click', () => openBoardNameModal('add'));
 btnBoardDelete.addEventListener('click', deleteCurrentBoard);
-boardNameBtn.addEventListener('click', renameCurrentBoard);
+boardNameBtn.addEventListener('click', () => openBoardNameModal('rename'));
+btnBoardNameCancel.addEventListener('click', closeBoardNameModal);
+btnBoardNameSave.addEventListener('click', submitBoardName);
+fBoardName.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitBoardName(); });
+boardNameModal.addEventListener('click', (e) => { if (e.target === boardNameModal) closeBoardNameModal(); });
 
 btnNew.addEventListener('click', openNewModal);
 btnCancel.addEventListener('click', closeModal);
@@ -1363,7 +1407,10 @@ function setAdminUI(on) {
   renderBoard();
 }
 
-function openPinModal() {
+let afterAdminPin = null; // callback to run right after a correct PIN entry, or null
+
+function openPinModal(afterAdmin = null) {
+  afterAdminPin = afterAdmin;
   fAdminPin.value = '';
   pinError.classList.add('hidden');
   pinModal.classList.remove('hidden');
@@ -1372,12 +1419,15 @@ function openPinModal() {
 
 function closePinModal() {
   pinModal.classList.add('hidden');
+  afterAdminPin = null;
 }
 
 function submitAdminPin() {
   if (fAdminPin.value === ADMIN_PIN) {
+    const fn = afterAdminPin;
     closePinModal();
     setAdminUI(true);
+    if (fn) fn();
   } else {
     pinError.classList.remove('hidden');
   }

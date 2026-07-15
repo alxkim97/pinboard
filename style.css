@@ -223,7 +223,7 @@ button:disabled {
   width: 34px;
   height: 34px;
   cursor: nwse-resize;
-  opacity: 0.32;
+  opacity: 0;
 }
 #board .note-card:hover .resize-handle,
 #board .note-card.resizing-card .resize-handle {
@@ -232,12 +232,12 @@ button:disabled {
 .resize-handle::before {
   content: '';
   position: absolute;
-  right: 7px;
-  bottom: 7px;
-  width: 14px;
-  height: 14px;
-  border-right: 3px solid rgba(0,0,0,0.45);
-  border-bottom: 3px solid rgba(0,0,0,0.45);
+  right: 8px;
+  bottom: 8px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid rgba(0,0,0,0.4);
+  border-bottom: 2px solid rgba(0,0,0,0.4);
 }
 .note-card:hover {
   transform: scale(1.04) rotate(0deg) !important;

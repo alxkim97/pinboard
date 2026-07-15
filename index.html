@@ -134,6 +134,22 @@
   </div>
 </div>
 
+<!-- Add / rename board modal -->
+<div id="board-name-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="board-name-modal-title">New Board</h2>
+    <label>Board name / ชื่อบอร์ด
+      <input id="f-board-name" type="text" maxlength="60" autocomplete="off" />
+    </label>
+    <div id="board-name-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <div class="spacer"></div>
+      <button id="btn-board-name-cancel" class="btn-secondary">Cancel / ยกเลิก</button>
+      <button id="btn-board-name-save" class="btn-primary">Save / บันทึก</button>
+    </div>
+  </div>
+</div>
+
 <script src="vendor/supabase.js"></script>
 <script src="app.js"></script>
 </body>
