@@ -187,6 +187,9 @@ button:disabled {
   border-width: 0 0 16px 16px;
   border-color: transparent transparent rgba(0,0,0,0.18) transparent;
   filter: blur(0.3px);
+  /* Purely decorative — without this, it paints on top of (and eats
+     clicks meant for) the resize handle sitting at the same corner. */
+  pointer-events: none;
 }
 .note-card::before {
   content: '';
@@ -198,6 +201,7 @@ button:disabled {
   border-style: solid;
   border-width: 0 0 14px 14px;
   border-color: transparent transparent rgba(255,255,255,0.35) transparent;
+  pointer-events: none;
 }
 #board .note-card {
   position: absolute;

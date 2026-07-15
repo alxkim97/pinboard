@@ -1,7 +1,7 @@
 {
   "name": "pinboard",
   "productName": "Pinboard",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Shared post-it note board for the APm R&D team",
   "main": "main.js",
   "author": "Alex · APm R&D",
