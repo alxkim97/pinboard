@@ -178,6 +178,9 @@ button:disabled {
   transition: transform 0.12s ease;
   position: relative;
   user-select: none;
+  /* Clip content that doesn't fit a shrunk card instead of letting it
+     spill out past the card's own edge onto the board behind it. */
+  overflow: hidden;
   background-image:
     repeating-linear-gradient(0deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 3px),
     repeating-linear-gradient(90deg, rgba(0,0,0,0.015) 0px, rgba(0,0,0,0.015) 1px, transparent 1px, transparent 4px),
