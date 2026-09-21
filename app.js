@@ -848,6 +848,36 @@ async function restorePins() {
   for (const note of notes) {
     if (pinnedIds.has(note.id)) window.pinAPI.open(note);
   }
+  // Pins are per-PC and independent of which board is open, so notes pinned
+  // from other boards must come back too — `notes` only holds the current
+  // board. Without this, creating/switching to a new board and restarting
+  // silently dropped every pin from the old board off the desktop.
+  const loaded = new Set(notes.map((n) => n.id));
+  const missing = [...pinnedIds].filter((id) => !loaded.has(id));
+  if (missing.length) {
+    const { data, error } = await supa.from(TABLE).select('*').in('id', missing);
+    if (error) {
+      console.error(error);
+    } else {
+      const found = new Set();
+      for (const note of data) {
+        found.add(note.id);
+        if (note.status === 'done') {
+          await window.pinAPI.close(note.id);
+          pinnedIds.delete(note.id);
+        } else {
+          window.pinAPI.open(note);
+        }
+      }
+      // Note was deleted while the app was closed — drop the orphan pin.
+      for (const id of missing) {
+        if (!found.has(id)) {
+          await window.pinAPI.close(id);
+          pinnedIds.delete(id);
+        }
+      }
+    }
+  }
   renderBoard();
 }
 
